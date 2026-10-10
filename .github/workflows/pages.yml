@@ -24,6 +24,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: 비밀 값 점검 (키·토큰이 저장소에 없는지)
+        run: npm run check:secrets
       - run: npx vite build
       - uses: actions/configure-pages@v5
         with:

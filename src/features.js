@@ -9,6 +9,7 @@ import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
 import { setSearch, gotoMatch, findMatches } from './editor.js';
 import { $, $$, h, toast, dialog, confirmDlg, promptDlg, ago, fullTime } from './ui.js';
+import { parseHtml, sanitizeHtml } from './sanitize.js';
 import { layoutOf, fontName, textCss, readHwpxLayout } from './layout.js';
 import { showPageSetup, layoutSummary } from './pagesetup.js';
 
@@ -219,7 +220,7 @@ export function printBook(book = bookOf('all'), opt = { titlePage: true, chapter
       #printArea h1.ch { font-family: ${t.fontFamily}; }
     }</style>` +
     (opt.titlePage ? `<section class="title-page"><h1 style="font-size:26pt">${h(book.title)}</h1><p style="font-size:13pt">${h(book.author || '')}</p></section>` : '') +
-    book.chapters.map((c) => `<section>${opt.chapterTitles ? `<h1 class="ch">${h(c.title)}</h1>` : ''}<div class="prose">${c.html}</div></section>`).join('');
+    book.chapters.map((c) => `<section>${opt.chapterTitles ? `<h1 class="ch">${h(c.title)}</h1>` : ''}<div class="prose">${sanitizeHtml(c.html)}</div></section>`).join('');
   setTimeout(() => window.print(), 50);
 }
 
@@ -598,8 +599,7 @@ export async function replaceAll() {
     for (const id of app.project.order) {
       if (id === app.cur) continue;
       const c = app.chapters.get(id);
-      const div = document.createElement('div');
-      div.innerHTML = c.html;
+      const div = parseHtml(c.html);
       let k = 0;
       const w = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
       while (w.nextNode()) { const t = w.currentNode; const parts = t.textContent.split(q); if (parts.length > 1) { k += parts.length - 1; t.textContent = parts.join(rep); } }

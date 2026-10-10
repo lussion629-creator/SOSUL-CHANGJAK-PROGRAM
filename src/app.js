@@ -5,6 +5,7 @@ import { createEditor, activeState, docParagraphs } from './editor.js';
 import { EditorState } from '@tiptap/pm/state';
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { countHtml, countText, fmt } from './stats.js';
+import { parseHtml, sanitizeHtml } from './sanitize.js';
 import { editAmounts, summarize, summaryLine, where, esc } from './diff.js';
 import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, promptDlg } from './ui.js';
 
@@ -325,7 +326,7 @@ export async function addChapter(title, html = '', after = app.cur) {
 async function addChapterInner(title, html, after) {
   await saveNow();
   const n = app.project.order.length + 1;
-  const c = S.newChapter(app.project.id, title || `${n}장`, html);
+  const c = S.newChapter(app.project.id, title || `${n}장`, sanitizeHtml(html));
   await S.putChapter(c);
   app.chapters.set(c.id, c);
   const idx = app.project.order.indexOf(after);
@@ -546,7 +547,7 @@ export async function snapshotMenu(id) {
     title: `${dayLabel(s.time)} ${hms(s.time)} 버전`,
     body: `<p class="hint" style="margin:0">${s.label ? h(s.label) + ' · ' : ''}${fmt(c.withSpace)}자 · 원고지 ${fmt(c.manuscript)}매</p>
       <details class="sum-box" open><summary>바뀐 내용 요약 <small>${prev ? `바로 앞 버전(${hm(prev.time)})과 비교` : '처음 버전'}</small></summary>${prev ? placesHtml(sm) : '<p class="hint">이 장의 첫 버전이라 비교할 앞 버전이 없습니다.</p>'}</details>
-      <details class="sum-box"><summary>이 버전 원고 보기</summary><div class="prose" style="max-height:40vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:14px 16px;background:var(--bg)">${s.html || '<p class="hint">(빈 원고)</p>'}</div></details>`,
+      <details class="sum-box"><summary>이 버전 원고 보기</summary><div class="prose" style="max-height:40vh;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:14px 16px;background:var(--bg)">${sanitizeHtml(s.html) || '<p class="hint">(빈 원고)</p>'}</div></details>`,
     buttons: [
       { label: '삭제', value: 'delete', left: true },
       { label: '이름 붙이기', value: 'label' },
@@ -584,8 +585,7 @@ export async function restoreSnapshot(s) {
 
 // HTML을 편집기 스키마로 해석해 문단 목록으로 (비교용)
 export function htmlParagraphs(html) {
-  const el = document.createElement('div');
-  el.innerHTML = html || '';
+  const el = parseHtml(html);
   const doc = PMDOMParser.fromSchema(app.editor.schema).parse(el);
   return docParagraphs(doc).map((p) => p.text);
 }

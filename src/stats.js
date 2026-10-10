@@ -1,9 +1,9 @@
 // 글자 수·원고지 매수·문장 분석 등 원고 통계
+import { parseHtml } from './sanitize.js';
 
 // HTML → 문단 배열 (일반 텍스트)
 export function htmlToParagraphs(html) {
-  const div = document.createElement('div');
-  div.innerHTML = html || '';
+  const div = parseHtml(html); // 실행되지 않는 별도 문서에서 읽는다
   const out = [];
   const blocks = div.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote > p, hr');
   if (!blocks.length) {

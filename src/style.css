@@ -3,8 +3,9 @@
 @font-face { font-family: 'KoPub Batang Light'; src: local('KoPub Batang Light'), local('KoPub바탕체 Light'), local('KoPubBatang-Light'), url('/fonts/kopub-batang-light.woff') format('woff'); font-weight: 400; font-display: swap; }
 
 :root {
-  --bg: #f6f3ee; --bg2: #efebe4; --panel: #fbfaf7; --paper: #ffffff; --ink: #24211d; --ink2: #6b655c; --ink3: #9a948a;
-  --line: #e2ddd4; --accent: #7a4b2a; --accent-bg: #f1e6dc; --ins: #1f7a3f; --ins-bg: #d9f2df; --del: #b3261e; --del-bg: #fbdcd8;
+  /* 밝은 모드: 새하얀 종이 대신 눈이 덜 부신 미색 */
+  --bg: #e8e3da; --bg2: #dfd9ce; --panel: #efebe4; --paper: #f6f2ea; --ink: #27231e; --ink2: #635d54; --ink3: #8f897e;
+  --line: #d6cfc3; --accent: #7a4b2a; --accent-bg: #e9ddcf; --ins: #1f7a3f; --ins-bg: #d9f2df; --del: #b3261e; --del-bg: #fbdcd8;
   --s-add: #2a78d6; --s-rev: #eb6834; --s-del: #1baf7a; --s-sum: #7a4b2a;
   --hl: #fff2a8; --shadow: 0 1px 3px rgba(40,30,20,.08), 0 8px 24px rgba(40,30,20,.06);
   --ui: Pretendard, -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
@@ -44,6 +45,9 @@ button { cursor: pointer; }
 .menu.open { display: block; }
 .menu button { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; background: none; border: 0; padding: 8px 10px; border-radius: 6px; }
 .menu button:hover { background: var(--bg2); }
+/* 메뉴 이름은 한 줄로 (끝 글자만 아랫줄로 떨어지지 않게), 오른쪽 설명만 필요하면 줄을 바꾼다 */
+.menu button { white-space: nowrap; align-items: baseline; }
+.menu button small { white-space: normal; text-align: right; min-width: 0; }
 .menu small { color: var(--ink3); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 .doc-title { flex: 1; display: flex; align-items: center; gap: 4px; min-width: 0; margin-left: 8px; }
@@ -439,6 +443,8 @@ ol.places del { background: var(--del-bg, rgba(180,71,61,.14)); color: inherit; 
 .toolbar .size-box button { min-width: 24px; height: 28px; padding: 0 4px; border-radius: 5px; color: var(--ink2); }
 .size-box input { width: 46px; border: 0; background: none; text-align: center; font-variant-numeric: tabular-nums; padding: 0; height: 28px; color: var(--ink); }
 .size-box input:focus { outline: none; }
+.ls-box .ls-label { font-size: 12px; color: var(--ink2); padding-left: 6px; }
+.ls-box input { width: 34px; }
 .size-box:focus-within { border-color: var(--accent); }
 /* ---------- 글꼴·단락 창 ---------- */
 .fmt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 12px; }

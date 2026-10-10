@@ -31,6 +31,52 @@ export function showSizeInBox() {
   box.placeholder = v ? '크기' : fmtPt(currentSize());
 }
 
+// ---------- 자간 (글자 사이 간격, %) ----------
+// 고른 글자에 적용한다. 아무것도 고르지 않았으면 커서가 있는 문단 전체에 적용한다
+// (한 줄 넘친 문단을 살짝 좁혀 줄을 맞출 때 쓰기 좋게).
+const clampLs = (n) => Math.max(-50, Math.min(50, Math.round(n)));
+export function currentSpacing() {
+  const v = app.editor.getAttributes('textStyle').letterSpacing;
+  if (v != null) return v;
+  const el = app.editor.view.domAtPos(app.editor.state.selection.from).node;
+  const node = el.nodeType === 1 ? el : el.parentElement;
+  const cs = getComputedStyle(node);
+  const px = parseFloat(cs.letterSpacing);
+  return Number.isFinite(px) && parseFloat(cs.fontSize) ? Math.round(px / parseFloat(cs.fontSize) * 100) : 0;
+}
+function spacingRange() {
+  const { state } = app.editor;
+  const { from, to, empty, $from } = state.selection;
+  if (!empty) return { from, to, whole: false };
+  return { from: $from.start(), to: $from.end(), whole: true };
+}
+export function setSpacing(v) {
+  const ed = app.editor;
+  const r = spacingRange();
+  if (r.from === r.to) { toast('자간을 바꿀 글자가 없어요.'); return; }
+  const val = v === '' || v == null ? null : clampLs(+v);
+  const sel = ed.state.selection;
+  ed.chain().focus().setTextSelection({ from: r.from, to: r.to }).setMark('textStyle', { letterSpacing: val }).removeEmptyTextStyle()
+    .setTextSelection({ from: sel.from, to: sel.to }).run();
+  showSpacingInBox();
+}
+export function stepSpacing(d) {
+  const r = spacingRange();
+  const ed = app.editor;
+  // 문단 전체일 때는 문단 첫 글자의 자간을 기준으로
+  const base = r.whole ? (ed.state.doc.nodeAt(r.from)?.marks.find((m) => m.type.name === 'textStyle')?.attrs.letterSpacing ?? currentSpacing()) : currentSpacing();
+  const n = clampLs(base + d);
+  setSpacing(n);
+  toast(`${r.whole ? '이 문단' : '고른 글자'} 자간 ${n}%`, 1200);
+}
+export function showSpacingInBox() {
+  const box = $('#letterSpacing');
+  if (!box || document.activeElement === box) return;
+  const v = app.editor.getAttributes('textStyle').letterSpacing;
+  box.value = v == null ? '' : String(v);
+  box.placeholder = String(currentSpacing());
+}
+
 // ---------- 글꼴 창 ----------
 export async function showFontDialog() {
   const ed = app.editor;
@@ -231,6 +277,8 @@ export function bindContextMenu() {
       <hr>
       <button data-c="font"><span>글꼴…</span><small>Ctrl+D</small></button>
       <button data-c="para"><span>단락…</span><small>Ctrl+Shift+P</small></button>
+      <button data-c="lsNarrow"><span>자간 좁게 (${sel ? '고른 글자' : '이 문단'})</span><small>Alt+Shift+N</small></button>
+      <button data-c="lsWide"><span>자간 넓게 (${sel ? '고른 글자' : '이 문단'})</span><small>Alt+Shift+W</small></button>
       <button data-c="clear"><span>서식 지우기</span></button>
       <hr>
       ${word ? `<button data-c="dict"><span>‘${h(word.slice(0, 12))}${word.length > 12 ? '…' : ''}’ 사전에서 찾기</span><small>표준국어대사전</small></button>` : ''}
@@ -263,6 +311,7 @@ export function bindContextMenu() {
     } else if (c === 'font') showFontDialog();
     else if (c === 'para') showParaDialog();
     else if (c === 'clear') runCommand(ed(), 'clear');
+    else if (c === 'lsNarrow' || c === 'lsWide') stepSpacing(c === 'lsWide' ? 1 : -1);
     else if (c === 'scene') runCommand(ed(), 'scene');
     else if (c === 'dict') window.open(`https://stdict.korean.go.kr/search/searchResult.do?searchKeyword=${encodeURIComponent(menu.dataset.word)}`, '_blank', 'noopener');
     else if (c === 'find') { const { openFind } = await import('./features.js'); $('#findInput').value = sel.trim(); openFind(); }
@@ -298,7 +347,9 @@ export function speak(text) {
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'ko-KR';
   u.rate = app.settings.speakRate || 1;
-  const ko = speechSynthesis.getVoices().find((v) => v.lang?.startsWith('ko'));
+  // 기기 안에서 읽는 목소리를 먼저 쓴다 (온라인 목소리는 원고 글을 바깥 서버로 보낼 수 있다)
+  const kos = speechSynthesis.getVoices().filter((v) => v.lang?.startsWith('ko'));
+  const ko = kos.find((v) => v.localService) || kos[0];
   if (ko) u.voice = ko;
   speechSynthesis.speak(u);
   toast('읽는 중… (Esc로 멈춤)', Math.min(15000, text.length * 120));

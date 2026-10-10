@@ -2,3 +2,10 @@ node_modules
 dist
 dist-single
 release
+# 비밀 값(키·토큰)은 절대 올리지 않는다
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+client_secret*.json

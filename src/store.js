@@ -1,6 +1,7 @@
 // 로컬 저장소 (IndexedDB). 모든 원고·자료·버전 기록은 기기 안에 먼저 저장된다.
 import { diffArrays } from 'diff';
 import { openDB } from 'idb';
+import { sanitizeHtml } from './sanitize.js';
 
 const DB_NAME = 'novel-writer';
 let dbp;
@@ -257,10 +258,26 @@ export async function readBundleBytes(buf) {
 export async function importBundle(b, { keepIds = true } = {}) {
   if (!b || b.format !== 'novel-writer') throw new Error('이 앱의 백업 파일이 아닙니다.');
   if ((b.snapshots || []).some((s) => s.d)) b = { ...b, snapshots: unpackSnapshots(b.snapshots) };
+  // 남이 만든 백업일 수 있으니 원고 HTML에서 스크립트 등을 걸러 낸다
+  b = {
+    ...b,
+    chapters: (b.chapters || []).map((c) => ({ ...c, html: sanitizeHtml(c.html) })),
+    snapshots: (b.snapshots || []).map((s) => ({ ...s, html: sanitizeHtml(s.html) })),
+  };
   const d = await db();
   const map = new Map();
-  const nid = (old) => { if (keepIds) return old; if (!map.has(old)) map.set(old, uid()); return map.get(old); };
+  // 아이디는 화면 HTML 속성에도 들어가므로, 이상한 글자가 섞인 아이디는 새로 만든다
+  const nid = (old) => {
+    if (keepIds && /^[\w-]{1,64}$/.test(String(old ?? ''))) return old;
+    if (!map.has(old)) map.set(old, uid());
+    return map.get(old);
+  };
   const project = { ...b.project, id: nid(b.project.id) };
+  // 쪽 설정 값은 화면·인쇄용 CSS에 들어가므로 숫자·참거짓·안전한 글자만 남긴다
+  if (project.layout && typeof project.layout === 'object') {
+    project.layout = Object.fromEntries(Object.entries(project.layout).filter(([, v]) =>
+      (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean' || (typeof v === 'string' && v.length < 120 && !/[<>{};\\]|\/\*/.test(v))));
+  } else delete project.layout;
   project.order = (project.order || []).map(nid);
   for (const c of b.chapters) {
     const id = nid(c.id);
@@ -273,7 +290,7 @@ export async function importBundle(b, { keepIds = true } = {}) {
     const id = nid(s.id);
     if (!(await d.get('snapshots', id))) await d.put('snapshots', { ...s, id, chapterId: nid(s.chapterId), projectId: project.id });
   }
-  for (const r of b.daily || []) await d.put('daily', { ...r, projectId: project.id, key: `${project.id}|${r.date}` });
+  for (const r of (b.daily || []).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x?.date || ''))) await d.put('daily', { ...r, projectId: project.id, key: `${project.id}|${r.date}` });
   await d.put('projects', project);
   return project;
 }

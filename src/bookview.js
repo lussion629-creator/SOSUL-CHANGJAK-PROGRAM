@@ -4,6 +4,7 @@ import { layoutOf } from './layout.js';
 import { paginate } from './paginate.js';
 import { countHtml, fmt } from './stats.js';
 import { $, h, toast } from './ui.js';
+import { parseHtml, sanitizeHtml } from './sanitize.js';
 
 let mode = 'flow';
 let run = 0;
@@ -24,8 +25,7 @@ function chapters() {
 
 // 장 HTML의 맨 위 블록마다 순서 번호를 붙인다 (두 번 눌러 찾아갈 때 쓴다)
 function numbered(html) {
-  const d = document.createElement('div');
-  d.innerHTML = html || '';
+  const d = parseHtml(sanitizeHtml(html));
   [...d.children].forEach((el, i) => el.setAttribute('data-pi', i));
   return d.innerHTML;
 }

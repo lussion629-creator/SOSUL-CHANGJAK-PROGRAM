@@ -14,7 +14,7 @@ import { bindPageView, togglePageView, applyPageView, setZoom } from './pageview
 import { showPageSetup } from './pagesetup.js';
 import { toggleBook, bindBook, isBookOpen } from './bookview.js';
 import { bindSafety, showRecovery, restoreFromTrash } from './safety.js';
-import { showFontDialog, showParaDialog, bindContextMenu, setSize, stepSize, showSizeInBox, speak } from './format.js';
+import { showFontDialog, showParaDialog, bindContextMenu, setSize, stepSize, showSizeInBox, speak, setSpacing, stepSpacing, showSpacingInBox } from './format.js';
 import { $, $$, toast } from './ui.js';
 
 const ACTIONS = {
@@ -26,7 +26,8 @@ const ACTIONS = {
   pageView: () => togglePageView(), pageSetup: showPageSetup, fontDlg: () => showFontDialog(), paraDlg: () => showParaDialog(),
   recover: () => showRecovery(),
   book: () => { closeRevision(); toggleBook(); },
-  bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
+  bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
+  lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1), lsReset: () => setSpacing(null), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
   drive: F.showDrive, driveImport: F.driveImport,
   renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
   addChapter: () => addChapter(), addNote: () => F.editNote(null),
@@ -38,7 +39,7 @@ async function boot() {
   await loadTemplates();
   initEditor();
   app.openRevision = openRevision;
-  app.hooks.toolbar = showSizeInBox;
+  app.hooks.toolbar = () => { showSizeInBox(); showSpacingInBox(); };
   G.configure(app.settings.driveClientId);
   G.onChange(refreshSyncPill);
 
@@ -109,6 +110,12 @@ function bind() {
     if (e.key === 'Enter') { e.preventDefault(); e.target.dispatchEvent(new Event('change')); app.editor.commands.focus(); }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); stepSize(e.key === 'ArrowUp' ? 0.5 : -0.5); e.target.value = ''; showSizeInBox(); }
   });
+  $('#letterSpacing').addEventListener('change', (e) => { const v = e.target.value.replace(/%$/, '').trim(); setSpacing(v === '' ? null : v); });
+  $('#letterSpacing').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.target.dispatchEvent(new Event('change')); app.editor.commands.focus(); }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); stepSpacing(e.key === 'ArrowUp' ? 1 : -1); e.target.value = ''; showSpacingInBox(); }
+  });
+  $$('[data-ls]').forEach((b) => { b.addEventListener('mousedown', (e) => e.preventDefault()); b.addEventListener('click', () => stepSpacing(+b.dataset.ls)); });
   $$('[data-size]').forEach((b) => { b.addEventListener('mousedown', (e) => e.preventDefault()); b.addEventListener('click', () => stepSize(+b.dataset.size)); });
   $('#textColor').addEventListener('input', (e) => { runCommand(app.editor, 'color', e.target.value); $('.color-btn span').style.borderColor = e.target.value; });
 
@@ -191,6 +198,7 @@ function bind() {
     else if (mod && !e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); showFontDialog(); }
     else if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); showParaDialog(); }
     else if (mod && (e.key === '[' || e.key === ']')) { e.preventDefault(); stepSize(e.key === ']' ? 0.5 : -0.5); }
+    else if (e.altKey && e.shiftKey && !mod && (e.code === 'KeyN' || e.code === 'KeyW') && !e.target.closest?.('input, textarea, select, dialog')) { e.preventDefault(); stepSpacing(e.code === 'KeyW' ? 1 : -1); }
     else if (mod && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
     else if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); ACTIONS.print(); }
     else if (e.key === 'Escape') {

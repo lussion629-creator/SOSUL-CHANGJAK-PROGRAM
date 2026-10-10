@@ -22,6 +22,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: 비밀 값 점검 (키·토큰이 저장소에 없는지)
+        run: npm run check:secrets
       - run: npx vite build
       - run: npx electron-builder --publish never ${{ matrix.os == 'windows-latest' && '--win' || '--mac' }}
         env:

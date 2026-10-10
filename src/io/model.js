@@ -1,10 +1,10 @@
 import { fontName } from '../fonts.js';
+import { parseHtml } from '../sanitize.js';
 // 에디터 HTML ↔ 파일 형식 사이의 공통 중간 모델
 // block: {type: 'p'|'h1'|'h2'|'h3'|'hr'|'quote'|'li'|'pagebreak', align, ordered, runs:[{text,bold,italic,underline,strike,color,highlight,font,size,br}]}
 
 export function htmlToBlocks(html) {
-  const div = document.createElement('div');
-  div.innerHTML = html || '';
+  const div = parseHtml(html);
   const blocks = [];
   const walkBlock = (el, ctx = {}) => {
     for (const node of el.childNodes) {
@@ -95,7 +95,7 @@ export function blocksToHtml(blocks) {
       continue;
     }
     closeList();
-    const st = b.align ? ` style="text-align: ${b.align}"` : '';
+    const st = /^(left|center|right|justify)$/.test(b.align || '') ? ` style="text-align: ${b.align}"` : ''; // 파일 값이 그대로 HTML에 들어가지 않게
     if (b.type === 'hr' || b.type === 'pagebreak') html += '<hr>';
     else if (/^h[1-3]$/.test(b.type)) html += `<${b.type}${st}>${runsHtml(b.runs)}</${b.type}>`;
     else if (b.type === 'quote') html += `<blockquote><p${st}>${runsHtml(b.runs)}</p></blockquote>`;
@@ -115,7 +115,7 @@ function runsHtml(runs = []) {
     if (r.underline) s = `<u>${s}</u>`;
     if (r.strike) s = `<s>${s}</s>`;
     const css = [];
-    if (r.color && r.color !== '#000000') css.push(`color: ${r.color}`);
+    if (r.color && r.color !== '#000000' && /^(#[0-9a-f]{3,8}|[a-z]{3,20})$/i.test(r.color)) css.push(`color: ${r.color}`);
     if (css.length) s = `<span style="${css.join('; ')}">${s}</span>`;
     return s;
   }).join('');

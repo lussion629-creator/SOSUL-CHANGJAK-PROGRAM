@@ -1,4 +1,5 @@
 import { textCss, numSide } from './layout.js';
+import { parseHtml, sanitizeHtml } from './sanitize.js';
 
 // 원고를 쪽 설정(없으면 A4)대로 쪽 단위로 나눠 PDF처럼 보여 준다
 export function paginate(html, target, { header = '', layout: L = null } = {}) {
@@ -24,8 +25,7 @@ export function paginate(html, target, { header = '', layout: L = null } = {}) {
     st.setProperty('--pg-mr', `${pc(L.mr)}cqw`);
     target.classList.add('laid');
   }
-  const src = document.createElement('div');
-  src.innerHTML = html;
+  const src = parseHtml(sanitizeHtml(html));
   // 글자마다 정한 크기(pt)는 쪽 글자 크기에 대한 비율로 바꿔야 쪽 크기에 맞게 줄어든다
   if (L) {
     for (const el of src.querySelectorAll('[data-fs]')) {
