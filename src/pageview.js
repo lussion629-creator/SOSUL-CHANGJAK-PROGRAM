@@ -77,6 +77,7 @@ export function applyPageView() {
   s.setProperty('--pv-pad', geo.top - half + 'px');
   s.setProperty('--pv-font', t.fontFamily);
   s.setProperty('--pv-size', t.fontSize);
+  s.setProperty('--pv-z', String(z));
   s.setProperty('--pv-line', t.lineHeight);
   s.setProperty('--pv-ls', t.letterSpacing);
   s.setProperty('--pv-indent', t.textIndent);

@@ -105,27 +105,48 @@ export async function writeHwpx(book, opt = {}) {
   if (L) Object.assign(opt, { size: L.size, lineHeight: L.line / 100 });
   const baseSize = Math.round((opt.size || 10) * 100);
   const HU = 7200 / 25.4;
-  let fontId = null;
-  if (L?.fontName) {
-    // 모든 언어 글꼴 목록에 이 글꼴을 더하고 기본 글자 모양이 쓰게 한다
-    header = header.replace(/<hh:fontface lang="(\w+)" fontCnt="(\d+)">([\s\S]*?)<\/hh:fontface>/g, (m, lang, cnt, inner) => {
-      fontId = +cnt;
-      return `<hh:fontface lang="${lang}" fontCnt="${+cnt + 1}">${inner}<hh:font id="${cnt}" face="${X(L.fontName)}" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_UNKNOWN" weight="5" proportion="0" contrast="0" strokeVariation="0" armStyle="0" letterform="0" midline="0" xHeight="0"/></hh:font></hh:fontface>`;
-    });
+  // 글꼴 목록: 쓰는 글꼴을 모든 언어 목록에 더한다 (언어마다 번호가 다를 수 있다)
+  const LANGS = ['HANGUL', 'LATIN', 'HANJA', 'JAPANESE', 'OTHER', 'SYMBOL', 'USER'];
+  const faces = {};
+  for (const m of header.matchAll(/<hh:fontface lang="(\w+)" fontCnt="(\d+)">([\s\S]*?)<\/hh:fontface>/g)) {
+    faces[m[1]] = { names: [...m[3].matchAll(/face="([^"]*)"/g)].map((x) => x[1]), extra: [] };
   }
+  const fontMap = new Map();
+  const addFont = (face) => {
+    if (fontMap.has(face)) return fontMap.get(face);
+    const ref = {};
+    for (const lang of Object.keys(faces)) {
+      const f = faces[lang];
+      let i = f.names.indexOf(X(face));
+      if (i < 0) {
+        i = f.names.length;
+        f.names.push(X(face));
+        f.extra.push(`<hh:font id="${i}" face="${X(face)}" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_UNKNOWN" weight="5" proportion="0" contrast="0" strokeVariation="0" armStyle="0" letterform="0" midline="0" xHeight="0"/></hh:font>`);
+      }
+      ref[lang] = i;
+    }
+    fontMap.set(face, ref);
+    return ref;
+  };
+  const fontRef = (ref) => `<hh:fontRef ${LANGS.map((l) => `${l.toLowerCase()}="${ref[l] ?? 0}"`).join(' ')}/>`;
+  const spacingXml = (v) => `<hh:spacing ${LANGS.map((l) => `${l.toLowerCase()}="${v}"`).join(' ')}/>`;
+  const baseFont = L?.fontName ? addFont(L.fontName) : null;
 
   // 글자 모양 추가: 굵게/기울임/밑줄/취소선/색/크기 조합마다 하나씩
   let charTpl = header.match(/<hh:charPr id="0"[\s\S]*?<\/hh:charPr>/)[0];
-  if (fontId != null) charTpl = charTpl.replace(/<hh:fontRef [^>]*\/>/, `<hh:fontRef hangul="${fontId}" latin="${fontId}" hanja="${fontId}" japanese="${fontId}" other="${fontId}" symbol="${fontId}" user="${fontId}"/>`);
-  if (L?.spacing) charTpl = charTpl.replace(/<hh:spacing [^>]*\/>/, `<hh:spacing hangul="${L.spacing}" latin="${L.spacing}" hanja="${L.spacing}" japanese="${L.spacing}" other="${L.spacing}" symbol="${L.spacing}" user="${L.spacing}"/>`);
+  if (baseFont) charTpl = charTpl.replace(/<hh:fontRef [^>]*\/>/, fontRef(baseFont));
+  if (L?.spacing) charTpl = charTpl.replace(/<hh:spacing [^>]*\/>/, spacingXml(L.spacing));
   let charCount = +header.match(/<hh:charProperties itemCnt="(\d+)"/)[1];
   const charMap = new Map();
   const extraChars = [];
   const charId = (f = {}, size = baseSize) => {
-    const key = JSON.stringify([!!f.bold, !!f.italic, !!f.underline, !!f.strike, f.color || '', size]);
+    if (f.size && size === baseSize) size = Math.round(f.size * 100); // 글자마다 정한 크기 (pt)
+    const key = JSON.stringify([!!f.bold, !!f.italic, !!f.underline, !!f.strike, f.color || '', size, f.font || '', f.spacing ?? '']);
     if (charMap.has(key)) return charMap.get(key);
     const id = charCount++;
     let x = charTpl.replace('id="0"', `id="${id}"`).replace('height="1000"', `height="${size}"`);
+    if (f.font) x = x.replace(/<hh:fontRef [^>]*\/>/, fontRef(addFont(f.font)));
+    if (f.spacing != null) x = x.replace(/<hh:spacing [^>]*\/>/, spacingXml(Math.max(-50, Math.min(50, Math.round(f.spacing)))));
     if (f.color) x = x.replace('textColor="#000000"', `textColor="${f.color}"`);
     let deco = '';
     if (f.italic) deco += '<hh:italic/>';
@@ -142,21 +163,41 @@ export async function writeHwpx(book, opt = {}) {
   let paraTpl = header.match(/<hh:paraPr id="0"[\s\S]*?<\/hh:paraPr>/)[0];
   // 한글 줄 나눔: 어절(KEEP_WORD) 또는 글자(BREAK_WORD)
   paraTpl = paraTpl.replace(/breakNonLatinWord="\w+"/, `breakNonLatinWord="${L?.breakWord === 'char' ? 'BREAK_WORD' : 'KEEP_WORD'}"`);
-  if (L?.paraAfter) paraTpl = paraTpl.replaceAll('<hc:next value="0"', `<hc:next value="${Math.round(L.paraAfter * 100)}"`);
+
   let paraCount = +header.match(/<hh:paraProperties itemCnt="(\d+)"/)[1];
   const paraMap = new Map();
   const extraParas = [];
   const lineSp = Math.round((opt.lineHeight || 1.6) * 100);
-  const paraId = (align = 'JUSTIFY', indent = 0, left = 0, before = 0) => {
-    const key = [align, indent, left, before].join();
+  // pf: 문단마다 '단락' 창에서 정한 값 {indL, indR, first, line, before, after, brk}
+  const paraId = (align = 'JUSTIFY', indent = 0, left = 0, before = 0, pf = null) => {
+    const em = (v) => Math.round(v * baseSize);
+    let right = 0, after = null, line = lineSp, brk = null;
+    if (pf) {
+      if (pf.indL != null) left += em(pf.indL);
+      if (pf.indR != null) right = em(pf.indR);
+      if (pf.first != null) indent = em(pf.first); // 음수면 내어쓰기
+      if (pf.line != null) line = Math.round(pf.line);
+      if (pf.before != null) before = Math.round(pf.before * 100);
+      if (pf.after != null) after = Math.round(pf.after * 100);
+      if (pf.brk) brk = pf.brk === 'char' ? 'BREAK_WORD' : 'KEEP_WORD';
+    }
+    const key = [align, indent, left, before, right, after, line, brk].join();
     if (paraMap.has(key)) return paraMap.get(key);
     const id = paraCount++;
+    if (after == null) after = L?.paraAfter ? Math.round(L.paraAfter * 100) : 0;
+    // 한글 규칙: hp:case(글자 단위 지원)에는 그대로, hp:default에는 두 배 값을 넣는다
+    const margins = (k) => (m) => m
+      .replace('<hc:intent value="0"', `<hc:intent value="${indent * k}"`)
+      .replace('<hc:left value="0"', `<hc:left value="${left * k}"`)
+      .replace('<hc:right value="0"', `<hc:right value="${right * k}"`)
+      .replace('<hc:prev value="0"', `<hc:prev value="${before * k}"`)
+      .replace('<hc:next value="0"', `<hc:next value="${after * k}"`);
     let x = paraTpl.replace('id="0"', `id="${id}"`)
       .replace('horizontal="JUSTIFY"', `horizontal="${align}"`)
-      .replaceAll('<hc:intent value="0"', `<hc:intent value="${indent}"`)
-      .replaceAll('<hc:left value="0"', `<hc:left value="${left}"`)
-      .replaceAll('<hc:prev value="0"', `<hc:prev value="${before}"`)
-      .replaceAll('type="PERCENT" value="160"', `type="PERCENT" value="${lineSp}"`);
+      .replace(/<hp:case[\s\S]*?<\/hp:case>/, margins(1))
+      .replace(/<hp:default>[\s\S]*?<\/hp:default>/, margins(2))
+      .replaceAll('type="PERCENT" value="160"', `type="PERCENT" value="${line}"`);
+    if (brk) x = x.replace(/breakNonLatinWord="\w+"/, `breakNonLatinWord="${brk}"`);
     extraParas.push(x);
     paraMap.set(key, id);
     return id;
@@ -197,14 +238,18 @@ export async function writeHwpx(book, opt = {}) {
     for (const b of htmlToBlocks(ch.html)) {
       if (b.type === 'hr') { para([{ text: '*' }], { pPr: paraId('CENTER'), pageBreak: brk }); brk = false; continue; }
       const head = { h1: 1600, h2: 1400, h3: 1200 }[b.type];
-      if (head) { para(b.runs, { pPr: paraId(ALIGN[b.align] || 'JUSTIFY'), bigSize: head, bold: true, pageBreak: brk }); brk = false; continue; }
+      if (head) { para(b.runs, { pPr: paraId(ALIGN[b.align] || 'JUSTIFY', 0, 0, 0, b.pf), bigSize: head, bold: true, pageBreak: brk }); brk = false; continue; }
       const left = b.type === 'quote' ? 2000 : 0;
       const runs = b.type === 'li' ? [{ text: b.ordered ? '' : '• ' }, ...b.runs] : b.runs;
-      para(runs, { pPr: paraId(ALIGN[b.align] || BODY, b.align ? 0 : indentUnit, left), pageBreak: brk });
+      para(runs, { pPr: paraId(ALIGN[b.align] || BODY, b.align === 'center' || b.align === 'right' ? 0 : indentUnit, left, 0, b.pf), pageBreak: brk });
       brk = false;
     }
   }
 
+  header = header.replace(/<hh:fontface lang="(\w+)" fontCnt="(\d+)">([\s\S]*?)<\/hh:fontface>/g, (m, lang, cnt, inner) => {
+    const f = faces[lang];
+    return f?.extra.length ? `<hh:fontface lang="${lang}" fontCnt="${+cnt + f.extra.length}">${inner}${f.extra.join('')}</hh:fontface>` : m;
+  });
   header = header
     .replace(/<hh:charProperties itemCnt="\d+">/, `<hh:charProperties itemCnt="${charCount}">`)
     .replace('</hh:charProperties>', extraChars.join('') + '</hh:charProperties>')

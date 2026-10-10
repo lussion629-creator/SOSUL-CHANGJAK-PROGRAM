@@ -69,13 +69,63 @@ export function newChapter(projectId, title = '새 장', html = '') {
   return { id: uid(), projectId, title, html, status: 'draft', synopsis: '', label: '', created: Date.now(), updated: Date.now() };
 }
 export async function getChapter(id) { return (await db()).get('chapters', id); }
-export async function putChapter(c) { await (await db()).put('chapters', c); return c; }
+export async function putChapter(c) {
+  // _로 시작하는 값(화면용 캐시)은 저장하지 않는다
+  const clean = Object.fromEntries(Object.entries(c).filter(([k]) => !k.startsWith('_')));
+  await (await db()).put('chapters', clean);
+  return c;
+}
 export async function chaptersOf(projectId) { return (await db()).getAllFromIndex('chapters', 'projectId', projectId); }
 export async function deleteChapter(id) {
   const d = await db();
   await d.delete('chapters', id);
   const keys = await d.getAllKeysFromIndex('snapshots', 'chapterId', id);
   for (const k of keys) await d.delete('snapshots', k);
+}
+
+// ---------- 휴지통: 지운 장·작품을 30일 동안 보관했다가 되살린다 ----------
+const TRASH_DAYS = 30;
+export async function trashList() {
+  const all = (await kvGet('trash', [])) || [];
+  const keep = all.filter((t) => Date.now() - t.time < TRASH_DAYS * 864e5);
+  if (keep.length !== all.length) await kvSet('trash', keep);
+  return keep.sort((a, b) => b.time - a.time);
+}
+async function pushTrash(item) {
+  const all = await trashList();
+  all.unshift({ id: uid(), time: Date.now(), ...item });
+  await kvSet('trash', all);
+}
+// 장을 휴지통으로 (버전 기록도 같이)
+export async function trashChapter(ch, { projectTitle = '', index = 0 } = {}) {
+  const d = await db();
+  const snaps = await d.getAllFromIndex('snapshots', 'chapterId', ch.id);
+  const clean = Object.fromEntries(Object.entries(ch).filter(([k]) => !k.startsWith('_')));
+  await pushTrash({ kind: 'chapter', title: ch.title, projectId: ch.projectId, projectTitle, index, chapter: clean, snapshots: packSnapshots(snaps) });
+  await deleteChapter(ch.id);
+}
+// 작품을 휴지통으로 (장·자료·버전 기록·하루 기록 모두)
+export async function trashProject(id) {
+  const b = packBundle(await exportBundle(id));
+  await pushTrash({ kind: 'project', title: b.project.title, bundle: b });
+  await deleteProject(id);
+}
+export async function dropTrash(id) { await kvSet('trash', (await trashList()).filter((t) => t.id !== id)); }
+// 되살리기: 장이면 {chapter}를, 작품이면 {project}를 돌려준다
+export async function restoreTrash(id) {
+  const t = (await trashList()).find((x) => x.id === id);
+  if (!t) throw new Error('휴지통에서 찾지 못했습니다.');
+  const d = await db();
+  let out;
+  if (t.kind === 'chapter') {
+    await d.put('chapters', t.chapter);
+    for (const s of unpackSnapshots(t.snapshots || [])) await d.put('snapshots', s);
+    out = { chapter: t.chapter, index: t.index };
+  } else {
+    out = { project: await importBundle(t.bundle, { keepIds: !(await d.get('projects', t.bundle.project.id)) }) };
+  }
+  await dropTrash(id);
+  return out;
 }
 
 // ---------- 자료(인물·장소·설정·메모) ----------
@@ -107,8 +157,10 @@ export async function pruneSnapshots(chapterId) {
   const now = Date.now();
   const seen = new Set();
   for (const s of list) {
-    if (s.kind !== 'auto' || s.label) continue;
     const age = now - s.time;
+    // 크게 지우기 전에 자동으로 남긴 버전은 30일 동안 둔다
+    if (s.kind === 'safety') { if (age > 30 * 864e5) await deleteSnapshot(s.id); continue; }
+    if (s.kind !== 'auto' || s.label) continue;
     if (age < 3 * 864e5) continue;
     const d = new Date(s.time);
     const bucket = age < 30 * 864e5 ? `${today(d)} ${d.getHours()}` : today(d);
@@ -137,7 +189,7 @@ export async function kvSet(k, v) { await (await db()).put('kv', v, k); }
 export async function exportBundle(projectId, { withHistory = true } = {}) {
   const d = await db();
   const project = await d.get('projects', projectId);
-  const chapters = await chaptersOf(projectId);
+  const chapters = (await chaptersOf(projectId)).map((c) => Object.fromEntries(Object.entries(c).filter(([k]) => !k.startsWith('_'))));
   const notes = await notesOf(projectId);
   const snapshots = withHistory ? await d.getAllFromIndex('snapshots', 'projectId', projectId) : [];
   const daily = await dailyOf(projectId);

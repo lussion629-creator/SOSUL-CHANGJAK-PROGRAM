@@ -6,7 +6,7 @@ import { EditorState } from '@tiptap/pm/state';
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { countHtml, countText, fmt } from './stats.js';
 import { editAmounts, summarize, summaryLine, where, esc } from './diff.js';
-import { $, $$, h, toast, hms, hm, dayLabel, dialog, confirmDlg, promptDlg } from './ui.js';
+import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, promptDlg } from './ui.js';
 
 const DEFAULTS = {
   font: "'Gowun Batang', 'Nanum Myeongjo', Batang, serif", size: 17, lineHeight: 1.9, width: 720,
@@ -74,7 +74,15 @@ function syncToolbar() {
     $$('#toolbar [data-cmd]').forEach((b) => b.classList.toggle('on', !!a[b.dataset.cmd]));
     $('#blockType').value = a.block;
     $('#fontFamily').value = [...$('#fontFamily').options].some((o) => o.value === a.font) ? a.font : '';
-    $('#fontSize').value = a.size || '';
+    app.hooks.toolbar?.();
+    // 고른 글자 수 (상태 표시줄)
+    const { from, to } = app.editor.state.selection;
+    const st = $('#stSel');
+    if (st) {
+      const t = from === to ? '' : app.editor.state.doc.textBetween(from, to, '\n');
+      st.hidden = !t;
+      if (t) st.textContent = `고른 글자 ${fmt(t.length)}자 (공백 제외 ${fmt(t.replace(/\s/g, '').length)})`;
+    }
   });
 }
 
@@ -184,6 +192,13 @@ async function updateDaily(amounts, chId) {
 }
 
 // ---------- 작품 열기 ----------
+// 백업을 들여오기 직전: 쓰던 글을 저장하고, 들여온 뒤 옛 화면 내용이 덮어쓰지 않게 한다
+export async function beforeImport() {
+  await saveNow();
+  clearTimeout(app.saveTimer);
+  app.dirty = false;
+}
+
 export async function openProject(id) {
   await saveNow();
   let p = await S.getProject(id);
@@ -351,8 +366,10 @@ export async function chapterMenu(id) {
       await S.addSnapshot(c, 'auto', '합치기 전');
       c.html = (c.html || '') + '<hr>' + (next.html || '');
       await S.putChapter(c);
-      await S.deleteChapter(next.id);
+      await S.trashChapter(next, { projectTitle: app.project.title, index: i + 1 });
       app.chapters.delete(next.id);
+      app.states.delete(next.id);
+      c._paras = undefined;
       order.splice(i + 1, 1);
       await S.putProject(app.project);
       app.states.delete(id);
@@ -360,8 +377,11 @@ export async function chapterMenu(id) {
     }
   } else if (r.value === 'delete') {
     if (order.length === 1) { toast('마지막 남은 장은 지울 수 없어요.'); return; }
-    if (await confirmDlg('장 삭제', `“${h(c.title)}”와 그 버전 기록을 지울까요? 되돌릴 수 없습니다. 먼저 내보내기로 백업할 수 있어요.`, '삭제', true)) {
-      await S.deleteChapter(id);
+    if (await confirmDlg('장 삭제', `“${h(c.title)}”를 휴지통으로 옮길까요? 버전 기록과 함께 30일 동안 보관되고, 도구 → ‘실수 되돌리기·복구’에서 언제든 되살릴 수 있어요.`, '휴지통으로', true)) {
+      if (id === app.cur) await saveNow();
+      await S.trashChapter(app.chapters.get(id), { projectTitle: app.project.title, index: i });
+      app.states.delete(id);
+      toastAction(`“${c.title}”를 휴지통으로 옮겼어요.`, '되살리기', async () => { const t = (await S.trashList()).find((x) => x.kind === 'chapter' && x.chapter.id === id); if (t) app.restoreTrash?.(t.id); });
       app.chapters.delete(id);
       order.splice(i, 1);
       await S.putProject(app.project);
@@ -413,7 +433,8 @@ async function summaryOf(s, prev) {
   if (s.sum && s.sumOf === prev.id) return s.sum;
   s.sum = summarize(snapParas(prev), snapParas(s), 40);
   s.sumOf = prev.id;
-  try { await S.updateSnapshot(s); } catch { /* 저장 못 해도 화면에는 보인다 */ }
+  // 그사이 지워졌을 수 있으니 다시 읽어서 있을 때만 요약을 붙여 저장한다
+  try { const cur = await S.getSnapshot(s.id); if (cur) await S.updateSnapshot({ ...cur, sum: s.sum, sumOf: s.sumOf }); } catch { /* 저장 못 해도 화면에는 보인다 */ }
   return s.sum;
 }
 const ymd = (t) => { const d = new Date(t); return [d.getFullYear(), d.getMonth() + 1, d.getDate()]; };
@@ -439,10 +460,13 @@ function fillFilter(list) {
 }
 
 let histRun = 0;
+const countCache = new Map(); // snapshot id → 글자 수
+const snapCount = (s) => { if (!countCache.has(s.id)) countCache.set(s.id, countHtml(s.html).withSpace); return countCache.get(s.id); };
 export async function renderHistory() {
-  const all = await S.snapshotsOf(app.cur);
-  const box = $('#historyList');
   const run = ++histRun;
+  const all = await S.snapshotsOf(app.cur);
+  if (run !== histRun) return;
+  const box = $('#historyList');
   fillFilter(all);
   const any = hf.y || hf.m || hf.d;
   $('#histSummary').hidden = !any;
@@ -454,9 +478,9 @@ export async function renderHistory() {
     const d = dayLabel(s.time);
     if (d !== day) { html += `<h4>${d}</h4>`; day = d; }
     const prev = all[i + 1];
-    const n = countHtml(s.html).withSpace;
-    const delta = prev ? n - countHtml(prev.html).withSpace : 0;
-    const lb = s.label ? `<b>${h(s.label)}</b>` : s.kind === 'manual' ? '<b>직접 저장</b>' : '자동';
+    const n = snapCount(s);
+    const delta = prev ? n - snapCount(prev) : 0;
+    const lb = s.kind === 'safety' ? `<b class="safe">${h(s.label || '자동 보관')}</b>` : s.label ? `<b>${h(s.label)}</b>` : s.kind === 'manual' ? '<b>직접 저장</b>' : '자동';
     const sum = prev ? (s.sum && s.sumOf === prev.id ? h(summaryLine(s.sum)) : '…') : '처음 버전';
     html += `<div class="h" data-snap="${s.id}"><div class="h-top"><span class="tm">${hm(s.time)}</span><span class="lb">${lb}</span>
       <span class="delta">${delta > 0 ? `<span class="p">+${fmt(delta)}</span>` : delta < 0 ? `<span class="m">${fmt(delta)}</span>` : ''}</span></div>
@@ -507,7 +531,7 @@ export async function summarizePeriod() {
     wide: true,
     body: `<p class="hint" style="margin:0">${before === first ? '이 기간 첫 버전' : '이 기간 바로 전 버전'}(${dayLabel(before.time)} ${hm(before.time)})과 이 기간 마지막 버전(${dayLabel(last.time)} ${hm(last.time)})을 비교했습니다. 버전 ${inP.length}개.</p>
       <div class="sum-box">${placesHtml(sm, { limit: 120 })}</div>`,
-    buttons: [{ label: '닫기', value: 'close' }, { label: '퇴고 모드로 나란히 보기', value: 'rev', primary: true }],
+    buttons: [{ label: '닫기', value: 'close' }, { label: '기간 전 버전과 지금 원고 나란히 보기', value: 'rev', primary: true }],
   });
   if (r.value === 'rev') app.openRevision?.(before.id);
 }
@@ -542,6 +566,7 @@ export async function snapshotMenu(id) {
 }
 
 export async function restoreSnapshot(s) {
+  if (s.chapterId !== app.cur && app.chapters.has(s.chapterId)) await openChapter(s.chapterId);
   if (!(await confirmDlg('이 버전으로 되돌리기', `지금 원고를 ${dayLabel(s.time)} ${hm(s.time)} 버전으로 바꿉니다. 지금 상태는 “되돌리기 전” 버전으로 기록에 남으니 언제든 다시 돌아올 수 있어요.`, '되돌리기'))) return false;
   await saveNow({ snapshot: false });
   const ch = app.chapters.get(app.cur);
@@ -565,8 +590,15 @@ export function htmlParagraphs(html) {
   return docParagraphs(doc).map((p) => p.text);
 }
 
-// ---------- 모바일 사이드바 ----------
+// ---------- 왼쪽 목록 (넓은 화면: 접기/펴기, 휴대폰: 서랍처럼 열기) ----------
 export function toggleSidebar(open) {
+  if (!matchMedia('(max-width: 820px)').matches) {
+    const hide = open === undefined ? !document.body.classList.contains('sb-hidden') : !open;
+    document.body.classList.toggle('sb-hidden', hide);
+    app.settings.sidebarHidden = hide;
+    saveSettings();
+    return;
+  }
   const sb = $('#sidebar');
   const on = open ?? !sb.classList.contains('open');
   sb.classList.toggle('open', on);
@@ -584,16 +616,21 @@ function closeSidebarMobile() { if (matchMedia('(max-width: 820px)').matches) to
 // 자동 동기화: 저장할 때마다가 아니라 정해 둔 간격(기본 5분)에 한 번만 올린다.
 // 바뀐 게 없으면 올리지 않고, 창을 닫거나 다른 앱으로 넘어갈 때는 바로 올린다.
 let pushedAt = 0;
+function needReconnect() {
+  const st = G.status();
+  if (app.settings.autoSync && st.configured && st.hadToken && !st.connected) setSyncState('err', '☁ 다시 연결해 주세요');
+}
 export function scheduleSync(delay) {
   app.syncPending = true;
-  if (!app.settings.autoSync || !G.status().connected) return;
+  if (!app.settings.autoSync || !G.status().connected) { needReconnect(); return; }
   if (app.syncTimer) return; // 이미 예약됨
   const every = (+app.settings.syncMinutes || 5) * 60e3;
   const wait = delay ?? Math.max(10e3, pushedAt + every - Date.now());
   app.syncTimer = setTimeout(() => { app.syncTimer = null; if (app.syncPending) syncNow({ quiet: true }); }, wait);
 }
 export function flushSync() {
-  if (!app.syncPending || !app.settings.autoSync || !G.status().connected) return null;
+  if (!app.syncPending || !app.settings.autoSync) return null;
+  if (!G.status().connected) { needReconnect(); return null; }
   clearTimeout(app.syncTimer); app.syncTimer = null;
   return syncNow({ quiet: true });
 }
@@ -620,7 +657,13 @@ export async function syncNow({ quiet = false } = {}) {
     const remote = await G.remoteInfo(app.project.id);
     if (remote && app.project.syncedAt && Date.parse(remote.modifiedTime) > Date.parse(app.project.syncedAt) + 1000) {
       const b = await G.pullBundle(remote.id, S.readBundleBytes);
-      await S.importBundle(b);
+      // 받는 동안 쓴 글까지 저장하고(가져오기 전에 버전으로 남는다) 그동안은 입력을 잠시 막는다
+      app.editor.setEditable(false);
+      try {
+        await saveNow();
+        clearTimeout(app.saveTimer); app.dirty = false;
+        await S.importBundle(b);
+      } finally { app.editor.setEditable(true); }
       const p = await S.getProject(app.project.id);
       p.syncedAt = remote.modifiedTime;
       await S.putProject(p);

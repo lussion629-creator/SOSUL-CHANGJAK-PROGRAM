@@ -13,7 +13,7 @@ export async function readDocx(arrayBuffer) {
   return htmlToBlocks(res.value);
 }
 
-const ALIGN = { center: AlignmentType.CENTER, right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED };
+const ALIGN = { center: AlignmentType.CENTER, right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED, left: AlignmentType.LEFT };
 
 function runsToDocx(runs = [], base = {}) {
   const out = [];
@@ -30,6 +30,7 @@ function runsToDocx(runs = [], base = {}) {
       highlight: r.highlight ? 'yellow' : undefined,
       font: r.font || undefined,
       size: r.size ? Math.round(r.size * 2) : base.size,
+      characterSpacing: r.spacing != null && base.pt ? Math.round((r.size || base.pt) * r.spacing / 100 * 20) : undefined,
     }));
   }
   return out;
@@ -49,6 +50,26 @@ export async function writeDocx(book, opt = {}) {
   const firstLine = L ? Math.round(L.indent * L.size * 20) : opt.indent ? size * 10 : 0;
   const bodyAlign = L?.align === 'left' ? AlignmentType.LEFT : AlignmentType.JUSTIFIED;
   const keepWord = !L || L.breakWord !== 'char'; // 한글 어절 단위 줄 나눔
+  const pt = L?.size || opt.size || 10;
+  const rb = { pt };
+  // 문단마다 '단락' 창에서 바꾼 값(여백·첫 줄·줄 간격·위아래·줄 나눔)을 덮어쓴다
+  const em = (v) => Math.round(v * pt * 20);
+  const paraProps = (b, indent0, spacing0) => {
+    const pf = b.pf || {};
+    const indent = { ...(indent0 || {}) };
+    if (pf.indL != null) indent.left = (indent.left || 0) + em(pf.indL);
+    if (pf.indR != null) indent.right = em(pf.indR);
+    if (pf.first != null) {
+      delete indent.firstLine; delete indent.hanging;
+      if (pf.first > 0) indent.firstLine = em(pf.first);
+      else if (pf.first < 0) { indent.hanging = em(-pf.first); indent.left = (indent.left || 0) + em(-pf.first); }
+    }
+    const sp = { ...(spacing0 || {}) };
+    if (pf.line != null) Object.assign(sp, L ? { line: Math.round(pt * pf.line / 100 * 20), lineRule: LineRuleType.EXACT } : { line: Math.round(240 * pf.line / 100), lineRule: LineRuleType.AUTO });
+    if (pf.before != null) sp.before = Math.round(pf.before * 20);
+    if (pf.after != null) sp.after = Math.round(pf.after * 20);
+    return { indent: Object.keys(indent).length ? indent : undefined, spacing: Object.keys(sp).length ? sp : undefined, wordWrap: pf.brk ? pf.brk !== 'char' : keepWord };
+  };
   const children = [];
 
   if (opt.titlePage) {
@@ -67,16 +88,14 @@ export async function writeDocx(book, opt = {}) {
       if (b.type === 'hr') { children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 200, after: 200 }, children: [new TextRun('*')] })); continue; }
       if (b.type === 'h1' || b.type === 'h2' || b.type === 'h3') {
         const lv = { h1: HeadingLevel.HEADING_1, h2: HeadingLevel.HEADING_2, h3: HeadingLevel.HEADING_3 }[b.type];
-        children.push(new Paragraph({ heading: lv, alignment: ALIGN[b.align], children: runsToDocx(b.runs) }));
+        children.push(new Paragraph({ heading: lv, alignment: ALIGN[b.align], ...paraProps(b), children: runsToDocx(b.runs, rb) }));
         continue;
       }
       children.push(new Paragraph({
         alignment: ALIGN[b.align] || bodyAlign,
-        indent: b.type === 'quote' ? { left: 720 } : (firstLine && !b.align ? { firstLine } : undefined),
+        ...paraProps(b, b.type === 'quote' ? { left: 720 } : (firstLine && b.align !== 'center' && b.align !== 'right' ? { firstLine } : undefined), spacing),
         bullet: b.type === 'li' && !b.ordered ? { level: 0 } : undefined,
-        spacing,
-        wordWrap: keepWord,
-        children: runsToDocx(b.runs),
+        children: runsToDocx(b.runs, rb),
       }));
     }
   });

@@ -7,7 +7,18 @@ let toastTimer;
 export function toast(msg, ms = 3200) {
   const t = $('#toast');
   t.textContent = msg;
+  t.classList.remove('act');
   t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), ms);
+}
+// 단추가 달린 알림 (예: '되돌리기')
+export function toastAction(msg, label, fn, ms = 9000) {
+  const t = $('#toast');
+  t.innerHTML = `<span>${h(msg)}</span><button type="button">${h(label)}</button>`;
+  t.classList.add('act');
+  t.hidden = false;
+  t.querySelector('button').onclick = () => { t.hidden = true; fn(); };
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), ms);
 }

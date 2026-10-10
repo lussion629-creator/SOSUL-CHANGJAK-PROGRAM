@@ -1,3 +1,4 @@
+import { fontName } from '../fonts.js';
 // 에디터 HTML ↔ 파일 형식 사이의 공통 중간 모델
 // block: {type: 'p'|'h1'|'h2'|'h3'|'hr'|'quote'|'li'|'pagebreak', align, ordered, runs:[{text,bold,italic,underline,strike,color,highlight,font,size,br}]}
 
@@ -13,8 +14,8 @@ export function htmlToBlocks(html) {
       }
       if (node.nodeType !== 1) continue;
       const tag = node.tagName.toLowerCase();
-      if (/^h[1-6]$/.test(tag)) blocks.push({ type: tag > 'h3' ? 'h3' : tag, align: alignOf(node), runs: runsOf(node) });
-      else if (tag === 'p') blocks.push({ type: ctx.quote ? 'quote' : ctx.li ? 'li' : 'p', ordered: ctx.ordered, align: alignOf(node), runs: runsOf(node) });
+      if (/^h[1-6]$/.test(tag)) blocks.push({ type: tag > 'h3' ? 'h3' : tag, align: alignOf(node), pf: pfOf(node), runs: runsOf(node) });
+      else if (tag === 'p') blocks.push({ type: ctx.quote ? 'quote' : ctx.li ? 'li' : 'p', ordered: ctx.ordered, align: alignOf(node), pf: pfOf(node), runs: runsOf(node) });
       else if (tag === 'hr') blocks.push({ type: 'hr' });
       else if (tag === 'blockquote') walkBlock(node, { ...ctx, quote: true });
       else if (tag === 'ul' || tag === 'ol') walkBlock(node, { ...ctx, ordered: tag === 'ol' });
@@ -29,9 +30,21 @@ export function htmlToBlocks(html) {
   return blocks;
 }
 
+// 단락 모양 (편집기의 '단락' 창에서 정한 값): {indL, indR, first(글자), line(%), before, after(pt), brk}
+function pfOf(el) {
+  const pf = {};
+  for (const [k, d] of [['indL', 'ind-l'], ['indR', 'ind-r'], ['first', 'first'], ['line', 'line'], ['before', 'before'], ['after', 'after']]) {
+    const v = el.getAttribute(`data-${d}`);
+    if (v !== null && v !== '' && !Number.isNaN(+v)) pf[k] = +v;
+  }
+  const b = el.getAttribute('data-brk');
+  if (b) pf.brk = b;
+  return Object.keys(pf).length ? pf : undefined;
+}
+
 function alignOf(el) {
   const a = el.style?.textAlign;
-  return a === 'center' || a === 'right' || a === 'justify' ? a : undefined;
+  return a === 'center' || a === 'right' || a === 'justify' || a === 'left' ? a : undefined;
 }
 
 function runsOf(el, fmt = {}) {
@@ -49,8 +62,10 @@ function runsOf(el, fmt = {}) {
     if (t === 'mark') f.highlight = n.getAttribute('data-color') || n.style.backgroundColor || '#fff59d';
     if (n.style) {
       if (n.style.color) f.color = toHex(n.style.color);
-      if (n.style.fontFamily) f.font = n.style.fontFamily.split(',')[0].replace(/["']/g, '').trim();
-      if (n.style.fontSize) { const pt = parseFloat(n.style.fontSize); if (pt) f.size = n.style.fontSize.endsWith('px') ? pt * 0.75 : pt; }
+      if (n.style.fontFamily) f.font = fontName(n.style.fontFamily.split(',')[0].trim().replace(/"/g, "'"));
+      const fs = n.getAttribute('data-fs') || (/calc/.test(n.style.fontSize) ? '' : n.style.fontSize);
+      if (fs) { const pt = parseFloat(fs); if (pt) f.size = fs.endsWith('px') ? pt * 0.75 : fs.endsWith('pt') ? pt : f.size; }
+      if (n.style.letterSpacing && n.style.letterSpacing.endsWith('em')) f.spacing = Math.round(parseFloat(n.style.letterSpacing) * 100);
       if (n.style.fontWeight === 'bold' || +n.style.fontWeight >= 600) f.bold = true;
     }
     runs.push(...runsOf(n, f));

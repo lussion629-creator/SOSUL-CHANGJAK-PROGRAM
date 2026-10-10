@@ -12,6 +12,9 @@ import { showStats } from './stats-view.js';
 import { loadTemplates } from './layout.js';
 import { bindPageView, togglePageView, applyPageView, setZoom } from './pageview.js';
 import { showPageSetup } from './pagesetup.js';
+import { toggleBook, bindBook, isBookOpen } from './bookview.js';
+import { bindSafety, showRecovery, restoreFromTrash } from './safety.js';
+import { showFontDialog, showParaDialog, bindContextMenu, setSize, stepSize, showSizeInBox, speak } from './format.js';
 import { $, $$, toast } from './ui.js';
 
 const ACTIONS = {
@@ -20,7 +23,10 @@ const ACTIONS = {
   revision: () => (isRevisionOpen() ? closeRevision() : openRevision()),
   focus: () => F.toggleFocus(), cork: () => { closeRevision(); F.toggleCork(); }, theme: toggleTheme, settings: F.showSettings,
   find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, sprint: F.showSprint, snapshot: manualSnapshot,
-  pageView: () => togglePageView(), pageSetup: showPageSetup,
+  pageView: () => togglePageView(), pageSetup: showPageSetup, fontDlg: () => showFontDialog(), paraDlg: () => showParaDialog(),
+  recover: () => showRecovery(),
+  book: () => { closeRevision(); toggleBook(); },
+  bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
   drive: F.showDrive, driveImport: F.driveImport,
   renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
   addChapter: () => addChapter(), addNote: () => F.editNote(null),
@@ -28,9 +34,11 @@ const ACTIONS = {
 
 async function boot() {
   loadSettings();
+  if (app.settings.sidebarHidden && !matchMedia('(max-width: 820px)').matches) document.body.classList.add('sb-hidden');
   await loadTemplates();
   initEditor();
   app.openRevision = openRevision;
+  app.hooks.toolbar = showSizeInBox;
   G.configure(app.settings.driveClientId);
   G.onChange(refreshSyncPill);
 
@@ -54,6 +62,10 @@ async function boot() {
   app.hooks.afterOpen.push(() => { if (isTabOpen('notes')) F.renderNotes(); revisionOnChapterChange(); applyPageView(); });
   bind();
   bindPageView();
+  bindContextMenu();
+  bindSafety();
+  bindBook();
+  app.restoreTrash = restoreFromTrash;
   bindRevision();
   F.bindCork();
   refreshSyncPill();
@@ -92,7 +104,12 @@ function bind() {
   $('#toolbar').addEventListener('click', (e) => { const b = e.target.closest('[data-cmd]'); if (b) runCommand(app.editor, b.dataset.cmd); });
   $('#blockType').addEventListener('change', (e) => runCommand(app.editor, 'block', e.target.value));
   $('#fontFamily').addEventListener('change', (e) => runCommand(app.editor, 'font', e.target.value));
-  $('#fontSize').addEventListener('change', (e) => runCommand(app.editor, 'size', e.target.value));
+  $('#fontSize').addEventListener('change', (e) => { if (e.target.value.trim()) setSize(e.target.value.replace(/pt$/i, '')); else runCommand(app.editor, 'size', ''); });
+  $('#fontSize').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.target.dispatchEvent(new Event('change')); app.editor.commands.focus(); }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); stepSize(e.key === 'ArrowUp' ? 0.5 : -0.5); e.target.value = ''; showSizeInBox(); }
+  });
+  $$('[data-size]').forEach((b) => { b.addEventListener('mousedown', (e) => e.preventDefault()); b.addEventListener('click', () => stepSize(+b.dataset.size)); });
   $('#textColor').addEventListener('input', (e) => { runCommand(app.editor, 'color', e.target.value); $('.color-btn span').style.borderColor = e.target.value; });
 
   // 제목
@@ -171,6 +188,10 @@ function bind() {
     else if (mod && e.key.toLowerCase() === 'h') { e.preventDefault(); F.openFind(); $('#replaceInput').focus(); }
     else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); F.toggleFocus(); }
     else if (e.key === 'F7') { e.preventDefault(); showPageSetup(); }
+    else if (mod && !e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); showFontDialog(); }
+    else if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); showParaDialog(); }
+    else if (mod && (e.key === '[' || e.key === ']')) { e.preventDefault(); stepSize(e.key === ']' ? 0.5 : -0.5); }
+    else if (mod && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
     else if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); ACTIONS.print(); }
     else if (e.key === 'Escape') {
       if ($('#dlg').open) return;
@@ -178,6 +199,7 @@ function bind() {
       else if (!$('#findbar').hidden) F.closeFind();
       else if (isRevisionOpen()) closeRevision();
       else if (!$('#cork').hidden) F.toggleCork(false);
+      else if (isBookOpen()) toggleBook(false);
       else setSearch(app.editor, '');
     }
   });

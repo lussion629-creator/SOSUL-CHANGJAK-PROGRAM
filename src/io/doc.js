@@ -263,7 +263,7 @@ export async function writeRtf(book, opt = {}) {
       if (head) { p(`\\b ${runs(b.runs)}\\b0`, { align: b.align, fi: 0, fs: head, extra: `\\outlinelevel${+b.type[1] - 1}` }); continue; }
       if (b.type === 'quote') { p(runs(b.runs), { fi: 0, extra: '\\li720' }); continue; }
       if (b.type === 'li') { p((b.ordered ? '' : '\\bullet\\tab ') + runs(b.runs), { fi: -360, extra: '\\li360' }); continue; }
-      p(runs(b.runs), { align: b.align, fi: b.align ? 0 : indent });
+      p(runs(b.runs), { align: b.align, fi: b.align === 'center' || b.align === 'right' ? 0 : indent });
     }
   });
   const font = opt.font || 'Batang';

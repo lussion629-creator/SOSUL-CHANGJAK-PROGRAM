@@ -3,7 +3,7 @@ import * as S from './store.js';
 import * as G from './gdrive.js';
 import {
   app, saveNow, openProject, openChapter, addChapter, renderBinder, saveSettings, applySettings, updateCounts,
-  todayWritten, renderGoal, syncNow, refreshSyncPill, bundleForSync, STATUS, projectTotal,
+  todayWritten, renderGoal, syncNow, refreshSyncPill, bundleForSync, STATUS, projectTotal, beforeImport,
 } from './app.js';
 import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
@@ -74,8 +74,9 @@ export async function showHome() {
           e.stopPropagation();
           const p = list.find((x) => x.id === del.dataset.del);
           dlg.close('close');
-          if (await confirmDlg('작품 삭제', `“${h(p.title)}”의 모든 장·자료·버전 기록을 이 기기에서 지웁니다. 되돌릴 수 없어요. (드라이브에 올린 백업은 남습니다)`, '삭제', true)) {
-            await S.deleteProject(p.id);
+          if (await confirmDlg('작품 삭제', `“${h(p.title)}”의 모든 장·자료·버전 기록을 휴지통으로 옮깁니다. 30일 동안 보관되고, 도구 → ‘실수 되돌리기·복구’에서 되살릴 수 있어요. (드라이브에 올린 백업도 그대로 남습니다)`, '휴지통으로', true)) {
+            if (p.id === app.project?.id) await saveNow();
+            await S.trashProject(p.id);
             if (p.id === app.project?.id) {
               const rest = await S.listProjects();
               if (rest.length) await openProject(rest[0].id); else await newProject('새 작품');
@@ -108,6 +109,7 @@ export async function openFromFile(given) {
   try {
     const r = await openFile(f, { onProgress: (n, total) => toast(`PDF 읽는 중… ${n}/${total}쪽`, 60000) });
     if (r.kind === 'bundle') {
+      await beforeImport();
       const exists = await S.getProject(r.data.project.id);
       const p = await S.importBundle(r.data, { keepIds: !exists || await confirmDlg('백업 불러오기', '같은 작품이 이미 있습니다. 덮어쓸까요? (지금 내용은 버전 기록에 남습니다) “취소”를 누르면 사본으로 불러옵니다.', '덮어쓰기') });
       await openProject(p.id);
@@ -250,9 +252,9 @@ export async function renderNotes() {
     <div class="d">${h((n.fields?.['역할'] || n.body || '').slice(0, 60))}</div></li>`).join('') || '<p class="hint">인물, 장소, 설정, 복선을 정리해 두세요.</p>';
 }
 
-export async function editNote(id) {
+export async function editNote(id, preset = {}) {
   const filter = $('#noteFilter').value;
-  const n = id ? notesCache.find((x) => x.id === id) : { id: S.uid(), projectId: app.project.id, type: filter === 'all' ? 'character' : filter, name: '', fields: {}, body: '' };
+  const n = id ? notesCache.find((x) => x.id === id) : { id: S.uid(), projectId: app.project.id, type: preset.body ? 'memo' : filter === 'all' ? 'character' : filter, name: preset.body ? `${app.chapters.get(app.cur)?.title || ''} 메모` : '', fields: {}, body: preset.body || '' };
   const fieldsHtml = (type) => NOTE_TYPES[type].fields.map((k) => `<label class="field"><span>${k}</span><input data-f="${k}" value="${h(n.fields?.[k] || '')}"></label>`).join('');
   // 이 자료가 등장하는 장
   let where = '';
@@ -528,6 +530,7 @@ export async function driveImport() {
     });
     if (!r.value || r.value === 'close') return;
     const b = await G.pullBundle(r.value, S.readBundleBytes);
+    await beforeImport();
     const p = await S.importBundle(b);
     const f = files.find((x) => x.id === r.value);
     p.syncedAt = f.modifiedTime;
@@ -583,6 +586,8 @@ export async function replaceAll() {
   // 지금 장: 뒤에서부터 바꿔야 위치가 어긋나지 않는다
   const ms = findMatches(app.editor.state.doc, q).reverse();
   if (ms.length) {
+    const { safetyPoint } = await import('./safety.js');
+    await safetyPoint(`“${q}” 모두 바꾸기 전`);
     let tr = app.editor.state.tr;
     for (const m of ms) tr = tr.insertText(rep, m.from, m.to);
     app.editor.view.dispatch(tr);
@@ -599,8 +604,8 @@ export async function replaceAll() {
       const w = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
       while (w.nextNode()) { const t = w.currentNode; const parts = t.textContent.split(q); if (parts.length > 1) { k += parts.length - 1; t.textContent = parts.join(rep); } }
       if (k) {
-        await S.addSnapshot(c, 'auto', `“${q}” 모두 바꾸기 전`);
-        c.html = div.innerHTML; c._count = null; c.updated = Date.now();
+        await S.addSnapshot(c, 'safety', `“${q}” 모두 바꾸기 전`);
+        c.html = div.innerHTML; c._count = null; c._paras = undefined; c.updated = Date.now();
         await S.putChapter(c);
         app.states.delete(id);
         n += k;
@@ -609,7 +614,7 @@ export async function replaceAll() {
     renderBinder();
   }
   runFind();
-  toast(`${n}곳을 바꿨어요.${$('#findAllChapters').checked ? ' 다른 장은 바꾸기 전 상태를 버전 기록에 남겼습니다.' : ''}`);
+  toast(`${n}곳을 바꿨어요. 바꾸기 전 원고는 버전 기록에 남겼어요. (Ctrl+Z 또는 도구 → 실수 되돌리기)`, 5000);
 }
 
 // ---------- 집중 모드 ----------

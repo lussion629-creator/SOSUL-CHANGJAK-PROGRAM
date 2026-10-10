@@ -142,6 +142,82 @@ const SmartQuotes = Extension.create({
   },
 });
 
+// ---------- 단락 모양 (Word의 '단락' 창): 여백·첫 줄·줄 간격·문단 위아래·줄 나눔 ----------
+// 값이 null이면 기본(쪽 설정·환경 설정) 그대로. 단위: 여백·첫 줄은 글자(em), 위아래는 pt, 줄 간격은 %
+const num = (name) => ({
+  default: null,
+  parseHTML: (el) => { const v = el.getAttribute(`data-${name}`); return v === null || v === '' ? null : +v; },
+  renderHTML: () => ({}),
+});
+export const PARA_KEYS = ['indL', 'indR', 'first', 'line', 'before', 'after', 'brk'];
+const ParaFormat = Extension.create({
+  name: 'paraFormat',
+  addGlobalAttributes() {
+    return [{
+      types: ['paragraph', 'heading'],
+      attributes: {
+        indL: num('ind-l'), indR: num('ind-r'), first: num('first'), line: num('line'), before: num('before'), after: num('after'),
+        brk: { default: null, parseHTML: (el) => el.getAttribute('data-brk') || null, renderHTML: () => ({}) },
+        // 여러 값을 한 번에 style로 (TipTap이 style을 이어 붙인다)
+        pfStyle: {
+          default: null,
+          parseHTML: () => null,
+          renderHTML: (a) => paraAttrs(a),
+        },
+      },
+    }];
+  },
+});
+export function paraAttrs(a) {
+  const st = [], data = {};
+  const set = (k, d, css) => { if (a[k] != null) { data[`data-${d}`] = a[k]; if (css) st.push(css); } };
+  set('indL', 'ind-l', `margin-left:${a.indL}em`);
+  set('indR', 'ind-r', `margin-right:${a.indR}em`);
+  if (a.first != null) { data['data-first'] = a.first; st.push(`text-indent:${a.first}em`); if (a.first < 0) st.push(`padding-left:${-a.first}em`); }
+  set('line', 'line', `line-height:${a.line / 100}`);
+  set('before', 'before', `margin-top:${a.before}pt`);
+  set('after', 'after', `margin-bottom:${a.after}pt`);
+  if (a.brk) { data['data-brk'] = a.brk; st.push(`word-break:${a.brk === 'char' ? 'break-all' : 'keep-all'}`); }
+  if (!st.length) return {};
+  return { ...data, style: st.join(';') };
+}
+
+// 글자 크기: 값은 '10.5pt'처럼 저장하고, 쪽 보기 배율(--pv-z)에 맞춰 그린다
+const FontSizeZ = FontSize.extend({
+  addGlobalAttributes() {
+    return [{
+      types: ['textStyle'],
+      attributes: {
+        fontSize: {
+          default: null,
+          parseHTML: (el) => el.getAttribute('data-fs') || el.style.fontSize || null,
+          renderHTML: (a) => {
+            if (!a.fontSize || !/^\d+(\.\d+)?(pt|px|em|rem|%)$/.test(a.fontSize)) return {};
+            return { 'data-fs': a.fontSize, style: `font-size:calc(${a.fontSize} * var(--pv-z, 1))` };
+          },
+        },
+      },
+    }];
+  },
+});
+
+// 자간 (글자 사이 간격, %)
+const LetterSpacing = Extension.create({
+  name: 'letterSpacing',
+  addGlobalAttributes() {
+    return [{
+      types: ['textStyle'],
+      attributes: {
+        letterSpacing: {
+          default: null,
+          parseHTML: (el) => { const v = el.style.letterSpacing; if (!v) return null; const n = parseFloat(v); return v.endsWith('em') ? Math.round(n * 100) : null; },
+          renderHTML: (a) => (a.letterSpacing == null ? {} : { style: `letter-spacing:${a.letterSpacing / 100}em` }),
+        },
+      },
+    }];
+  },
+});
+
 // ---------- 타자기 스크롤: 커서 줄을 화면 가운데에 둔다 ----------
 const Typewriter = Extension.create({
   name: 'typewriter',
@@ -169,7 +245,7 @@ export function createEditor(el, { onUpdate, onSelection, smartQuotes, typewrite
       StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false, code: false, link: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Highlight.configure({ multicolor: true }),
-      TextStyle, Color, FontFamily, FontSize,
+      TextStyle, Color, FontFamily, FontSizeZ, LetterSpacing, ParaFormat,
       Placeholder.configure({ placeholder: '여기에 이야기를 시작하세요…' }),
       Focus.configure({ className: 'has-focus', mode: 'shallowest' }),
       Search,

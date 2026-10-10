@@ -22,7 +22,7 @@
 <div id="app">
   <!-- 상단 바 -->
   <header class="topbar">
-    <button class="icon-btn only-mobile" id="btnSidebar" title="목록"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    <button class="icon-btn" id="btnSidebar" title="왼쪽 목록 접기/펴기 (Ctrl+\\)" aria-label="왼쪽 목록 접기/펴기"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
     <div class="menu-wrap">
       <button class="menu-btn" data-menu="file">파일</button>
       <div class="menu" id="menu-file">
@@ -45,6 +45,7 @@
         <button data-act="pageView">쪽 보기 켜기/끄기 <small>용지 모양대로 한 쪽씩</small></button>
         <button data-act="revision">퇴고 모드 (나란히 비교)</button>
         <button data-act="focus">집중 모드</button>
+        <button data-act="book">장 이어서 전체 보기 <small>모든 장을 한 번에</small></button>
         <button data-act="cork">코르크보드 (장 카드)</button>
         <hr>
         <button data-act="theme">다크 모드 전환</button>
@@ -52,14 +53,29 @@
       </div>
     </div>
     <div class="menu-wrap">
+      <button class="menu-btn" data-menu="format">서식</button>
+      <div class="menu" id="menu-format">
+        <button data-act="fontDlg">글꼴… <small>Ctrl+D</small></button>
+        <button data-act="paraDlg">단락… <small>Ctrl+Shift+P</small></button>
+        <hr>
+        <button data-act="bigger">글자 0.5pt 크게 <small>Ctrl+]</small></button>
+        <button data-act="smaller">글자 0.5pt 작게 <small>Ctrl+[</small></button>
+        <hr>
+        <button data-act="pageSetup">쪽 설정·템플릿… <small>F7</small></button>
+        <p class="menu-hint">원고에서 마우스 오른쪽 단추를 눌러도 글꼴·단락을 바꿀 수 있어요.</p>
+      </div>
+    </div>
+    <div class="menu-wrap">
       <button class="menu-btn" data-menu="tools">도구</button>
       <div class="menu" id="menu-tools">
         <button data-act="find">찾기 / 바꾸기</button>
         <button data-act="analyze">퇴고 도우미 (반복어·긴 문장)</button>
+        <button data-act="speak">소리 내어 읽기 <small>고른 부분·이 문단, Esc로 멈춤</small></button>
         <button data-act="stats">하루 기록 그래프 <small>쓴·고친·지운 양</small></button>
         <button data-act="goals">목표</button>
         <button data-act="sprint">타이머 (글쓰기 스프린트)</button>
         <button data-act="snapshot">지금 버전 저장 (이름 붙이기)</button>
+        <button data-act="recover">실수 되돌리기 · 복구 <small>휴지통</small></button>
         <hr>
         <button data-act="drive">구글 드라이브 연결</button>
       </div>
@@ -105,10 +121,12 @@
       <option value="Pretendard">프리텐다드</option>
       <option value="Batang, serif">바탕 (설치된 글꼴)</option>
     </select>
-    <select id="fontSize" title="글자 크기">
-      <option value="">크기</option>
-      <option>9pt</option><option>10pt</option><option>11pt</option><option>12pt</option><option>14pt</option><option>16pt</option><option>18pt</option><option>24pt</option><option>32pt</option>
-    </select>
+    <span class="size-box" title="글자 크기 (pt, 0.5 단위). Ctrl+[ 작게, Ctrl+] 크게">
+      <button type="button" data-size="-0.5" aria-label="글자 0.5pt 작게">−</button>
+      <input id="fontSize" list="fontSizes" inputmode="decimal" placeholder="크기" aria-label="글자 크기 (pt)" autocomplete="off">
+      <button type="button" data-size="0.5" aria-label="글자 0.5pt 크게">+</button>
+    </span>
+    <datalist id="fontSizes"><option value="7"><option value="7.5"><option value="8"><option value="8.5"><option value="9"><option value="9.5"><option value="10"><option value="10.5"><option value="11"><option value="11.5"><option value="12"><option value="12.5"><option value="13"><option value="13.5"><option value="14"><option value="15"><option value="16"><option value="18"><option value="20"><option value="22"><option value="24"><option value="28"><option value="32"><option value="36"></datalist>
     <span class="tsep"></span>
     <button data-cmd="bold" title="굵게 (Ctrl+B)"><b>가</b></button>
     <button data-cmd="italic" title="기울임 (Ctrl+I)"><i>가</i></button>
@@ -229,6 +247,15 @@
         </div>
       </div>
 
+      <!-- 전체 이어 보기 -->
+      <div class="cork book" id="bookView" hidden>
+        <div class="rev-bar"><strong>전체 이어 보기</strong><span class="hint" id="bookStat"></span>
+          <div class="seg"><button data-book="flow" class="on">글만</button><button data-book="page">쪽 모양</button></div>
+          <select id="bookToc" class="small" aria-label="차례"></select>
+          <button class="small" data-act="book">닫기</button></div>
+        <div class="book-body" id="bookBody"></div>
+      </div>
+
       <!-- 코르크보드 -->
       <div class="cork" id="cork" hidden>
         <div class="rev-bar"><strong>코르크보드</strong><span class="hint">카드를 끌어 장 순서를 바꿀 수 있어요</span><button class="small" data-act="cork">닫기</button></div>
@@ -242,6 +269,7 @@
     <span id="stChars" title="공백 포함 / 공백 제외"></span>
     <span id="stManu" title="200자 원고지 기준"></span>
     <span id="stTotal" title="작품 전체"></span>
+    <span id="stSel" class="st-sel" hidden></span>
     <span id="pvZoom" hidden><span id="pvStat" title="이 장의 쪽 수"></span> <select class="pvzoom" id="pvZoomSel" title="쪽 보기 배율"><option value="fit">폭 맞춤</option><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option><option value="125">125%</option><option value="150">150%</option></select></span>
     <button class="today" id="stToday" data-act="stats" title="눌러서 날짜별 그래프 보기"></button>
     <span class="goal" id="stGoal" data-act="goals" title="오늘 목표"><span class="bar"><i id="goalBar"></i></span><span id="goalText"></span></span>

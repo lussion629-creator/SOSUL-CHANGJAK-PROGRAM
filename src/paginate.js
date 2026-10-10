@@ -26,6 +26,13 @@ export function paginate(html, target, { header = '', layout: L = null } = {}) {
   }
   const src = document.createElement('div');
   src.innerHTML = html;
+  // 글자마다 정한 크기(pt)는 쪽 글자 크기에 대한 비율로 바꿔야 쪽 크기에 맞게 줄어든다
+  if (L) {
+    for (const el of src.querySelectorAll('[data-fs]')) {
+      const v = el.getAttribute('data-fs');
+      if (/pt$/.test(v)) el.style.fontSize = `${parseFloat(v) / L.size}em`;
+    }
+  }
   const blocks = [...src.children];
   let n = 0;
   let page, body;
