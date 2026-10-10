@@ -75,8 +75,8 @@ export async function newProject(title) {
   toast(`“${title}”을(를) 만들었어요.`);
 }
 
-export async function openFromFile() {
-  const f = await pickFile();
+export async function openFromFile(given) {
+  const f = given instanceof File ? given : await pickFile();
   if (!f) return;
   try {
     const r = await openFile(f, { onProgress: (n, total) => toast(`PDF 읽는 중… ${n}/${total}쪽`, 60000) });

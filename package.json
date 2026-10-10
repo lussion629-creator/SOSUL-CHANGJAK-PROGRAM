@@ -6,15 +6,14 @@
     "dev": "vite",
     "build": "vite build",
     "build:single": "vite build --mode single",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "desktop": "vite build && electron .",
+    "dist:win": "vite build && electron-builder --win",
+    "dist:mac": "vite build && electron-builder --mac"
   },
-  "author": "",
+  "author": "lussion629-creator",
   "license": "ISC",
   "devDependencies": {
-    "vite": "^5.4.21",
-    "vite-plugin-singlefile": "^2.3.3"
-  },
-  "dependencies": {
     "@tiptap/core": "^3.31.4",
     "@tiptap/extension-color": "^3.31.4",
     "@tiptap/extension-font-family": "^3.31.4",
@@ -28,13 +27,69 @@
     "cfb": "^1.2.2",
     "diff": "^9.0.0",
     "docx": "^9.9.0",
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12",
     "hwp.js": "^0.0.3",
     "idb": "^8.0.4",
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "pako": "^3.0.2",
-    "pdfjs-dist": "^4.10.38"
+    "pdfjs-dist": "^4.10.38",
+    "vite": "^5.4.21",
+    "vite-plugin-singlefile": "^2.3.3"
   },
   "private": true,
-  "type": "module"
+  "type": "module",
+  "productName": "소설 워드프로세서",
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "io.github.lussion629-creator.novelwriter",
+    "productName": "소설 워드프로세서",
+    "artifactName": "NovelWriter-Setup-${version}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "소설 워드프로세서",
+      "language": "1042",
+      "installerLanguages": [
+        "ko_KR"
+      ],
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png"
+    },
+    "executableName": "NovelWriter"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lussion629-creator/SOSUL-CHANGJAK-PROGRAM.git"
+  }
 }

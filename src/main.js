@@ -51,6 +51,10 @@ async function boot() {
   refreshSyncPill();
   if (G.status().connected) syncNow({ quiet: true });
   registerSW();
+  // 다른 곳에서 넘겨받은 파일 열기: 데스크톱 앱(연결 프로그램), 설치한 웹앱(파일 연결)
+  window.desktop?.onOpenFile(({ name, data }) => F.openFromFile(new File([data], name)));
+  window.launchQueue?.setConsumer(async (p) => { for (const h of p.files || []) F.openFromFile(await h.getFile()); });
+  window.__saveBeforeClose = () => saveNow();
 }
 
 function bind() {
@@ -167,7 +171,7 @@ function bind() {
 }
 
 function registerSW() {
-  if (!('serviceWorker' in navigator) || location.protocol === 'file:' || import.meta.env.DEV) return;
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:' || window.desktop || import.meta.env.DEV) return;
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
