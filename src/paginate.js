@@ -32,6 +32,12 @@ export function paginate(html, target, { header = '', layout: L = null } = {}) {
       const v = el.getAttribute('data-fs');
       if (/pt$/.test(v)) el.style.fontSize = `${parseFloat(v) / L.size}em`;
     }
+    // 줄 간격 고정·최소(pt)와 pt 자간도 같은 방식으로 (쪽 크기에 맞게)
+    for (const el of src.querySelectorAll('[data-lpt]')) {
+      const r = +el.getAttribute('data-lpt') / L.size;
+      if (r > 0) el.style.lineHeight = el.getAttribute('data-lt') === 'min' ? `max(1.2em, ${r}em)` : `${r}em`;
+    }
+    for (const el of src.querySelectorAll('[data-ls$="pt"]')) el.style.letterSpacing = `${parseFloat(el.getAttribute('data-ls')) / L.size}em`;
   }
   const blocks = [...src.children];
   let n = 0;

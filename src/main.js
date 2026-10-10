@@ -14,10 +14,15 @@ import { bindPageView, togglePageView, applyPageView, setZoom } from './pageview
 import { showPageSetup } from './pagesetup.js';
 import { toggleBook, bindBook, isBookOpen } from './bookview.js';
 import { bindSafety, showRecovery, restoreFromTrash } from './safety.js';
-import { showFontDialog, showParaDialog, bindContextMenu, setSize, stepSize, showSizeInBox, speak, setSpacing, stepSpacing, showSpacingInBox } from './format.js';
+import { showFontDialog, showParaDialog, bindContextMenu, setSize, stepSize, showSizeInBox, speak, setSpacing, stepSpacing, showSpacingInBox, parseSpacing, bindHighlight } from './format.js';
 import { $, $$, toast } from './ui.js';
 
+import * as A from './annotate.js';
+import { bindKeys, showKeys } from './keys.js';
+import * as T from './tools.js';
 const ACTIONS = {
+  annotate: () => A.addAnnotation(), index: () => A.showIndex(), keys: () => showKeys(), tidy: () => T.showTidy(), appear: () => T.showAppearances(),
+  annoSide: () => { const nx = { right: 'left', left: 'off', off: 'right' }[app.settings.annoSide || 'right']; A.setAnnoSide(nx); toast({ right: '주석을 오른쪽 여백에 보여 줘요.', left: '주석을 왼쪽 여백에 보여 줘요.', off: '여백 주석을 숨겼어요. 주석 글자를 누르면 볼 수 있어요.' }[nx]); },
   home: F.showHome, newProject: () => F.newProject(), open: F.openFromFile, importChapter: F.importChapter,
   export: F.showExport, print: async () => { await saveNow(); F.printBook(); }, backup: F.downloadBackup,
   revision: () => (isRevisionOpen() ? closeRevision() : openRevision()),
@@ -60,10 +65,13 @@ async function boot() {
     }
   }
   await openProject(pid);
-  app.hooks.afterOpen.push(() => { if (isTabOpen('notes')) F.renderNotes(); revisionOnChapterChange(); applyPageView(); });
+  app.hooks.afterOpen.push(() => { if (isTabOpen('notes')) F.renderNotes(); revisionOnChapterChange(); applyPageView(); A.annosChanged(); });
   bind();
   bindPageView();
   bindContextMenu();
+  bindHighlight();
+  T.bindChapterGoal();
+  A.bindAnnotations({ onNotesChange: () => { if (isTabOpen('notes')) F.renderNotes(); } });
   bindSafety();
   bindBook();
   app.restoreTrash = restoreFromTrash;
@@ -110,7 +118,11 @@ function bind() {
     if (e.key === 'Enter') { e.preventDefault(); e.target.dispatchEvent(new Event('change')); app.editor.commands.focus(); }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); stepSize(e.key === 'ArrowUp' ? 0.5 : -0.5); e.target.value = ''; showSizeInBox(); }
   });
-  $('#letterSpacing').addEventListener('change', (e) => { const v = e.target.value.replace(/%$/, '').trim(); setSpacing(v === '' ? null : v); });
+  $('#letterSpacing').addEventListener('change', (e) => {
+    const v = parseSpacing(e.target.value);
+    if (v === undefined) { toast('자간은 -3 (%) 또는 0.5pt처럼 넣어 주세요.'); showSpacingInBox(); return; }
+    setSpacing(v);
+  });
   $('#letterSpacing').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); e.target.dispatchEvent(new Event('change')); app.editor.commands.focus(); }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); stepSpacing(e.key === 'ArrowUp' ? 1 : -1); e.target.value = ''; showSpacingInBox(); }
@@ -187,21 +199,27 @@ function bind() {
     ({ prev: () => F.runFind(-1), next: () => F.runFind(1), one: F.replaceOne, all: F.replaceAll, close: F.closeFind })[b.dataset.find]();
   });
 
-  // 단축키
+  // 단축키 (설정에서 바꿀 수 있음: keys.js)
+  const chapterStep = (d) => { const o = app.project.order; const i = o.indexOf(app.cur) + d; if (i >= 0 && i < o.length) openChapter(o[i]); };
+  bindKeys({
+    save: () => { app.dirty = true; saveNow().then(() => toast('저장했어요.', 1500)); },
+    print: () => ACTIONS.print(),
+    undo: () => runCommand(app.editor, 'undo'), redo: () => runCommand(app.editor, 'redo'),
+    find: () => F.openFind(), replace: () => { F.openFind(); $('#replaceInput').focus(); },
+    annotate: () => A.addAnnotation(), scene: () => runCommand(app.editor, 'scene'), snapshot: () => manualSnapshot(),
+    bold: () => runCommand(app.editor, 'bold'), italic: () => runCommand(app.editor, 'italic'), underline: () => runCommand(app.editor, 'underline'),
+    strike: () => runCommand(app.editor, 'strike'), highlight: () => runCommand(app.editor, 'highlight'), clear: () => runCommand(app.editor, 'clear'),
+    fontDlg: () => showFontDialog(), paraDlg: () => showParaDialog(),
+    bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5), lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1),
+    left: () => runCommand(app.editor, 'left'), center: () => runCommand(app.editor, 'center'), right: () => runCommand(app.editor, 'right'), justify: () => runCommand(app.editor, 'justify'),
+    pageSetup: () => showPageSetup(), focus: () => F.toggleFocus(), sidebar: () => toggleSidebar(),
+    pageView: () => ACTIONS.pageView(), book: () => ACTIONS.book(), revision: () => ACTIONS.revision(), theme: () => toggleTheme(),
+    addChapter: () => addChapter(), prevChapter: () => chapterStep(-1), nextChapter: () => chapterStep(1),
+    speak: () => ACTIONS.speak(), sprint: () => ACTIONS.sprint(), index: () => A.showIndex(), keys: () => showKeys(),
+    tidy: () => T.showTidy(), appear: () => T.showAppearances(), split: () => T.splitChapterAtCursor(),
+  });
   document.addEventListener('keydown', (e) => {
-    const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); app.dirty = true; saveNow().then(() => toast('저장했어요.', 1500)); }
-    else if (mod && e.key.toLowerCase() === 'f' && !e.shiftKey) { e.preventDefault(); F.openFind(); }
-    else if (mod && e.key.toLowerCase() === 'h') { e.preventDefault(); F.openFind(); $('#replaceInput').focus(); }
-    else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); F.toggleFocus(); }
-    else if (e.key === 'F7') { e.preventDefault(); showPageSetup(); }
-    else if (mod && !e.shiftKey && e.key.toLowerCase() === 'd') { e.preventDefault(); showFontDialog(); }
-    else if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); showParaDialog(); }
-    else if (mod && (e.key === '[' || e.key === ']')) { e.preventDefault(); stepSize(e.key === ']' ? 0.5 : -0.5); }
-    else if (e.altKey && e.shiftKey && !mod && (e.code === 'KeyN' || e.code === 'KeyW') && !e.target.closest?.('input, textarea, select, dialog')) { e.preventDefault(); stepSpacing(e.code === 'KeyW' ? 1 : -1); }
-    else if (mod && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
-    else if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); ACTIONS.print(); }
-    else if (e.key === 'Escape') {
+    if (e.key === 'Escape') {
       if ($('#dlg').open) return;
       if (document.body.classList.contains('focus')) F.toggleFocus(false);
       else if (!$('#findbar').hidden) F.closeFind();

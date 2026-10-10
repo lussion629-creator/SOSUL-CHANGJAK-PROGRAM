@@ -13,7 +13,7 @@ const DROP_WITH_CONTENT = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'FRAME', 'FRAMES
   'NOSCRIPT', 'SVG', 'MATH', 'LINK', 'META', 'BASE', 'TITLE', 'HEAD', 'FORM', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT',
   'OPTION', 'IMG', 'VIDEO', 'AUDIO', 'SOURCE', 'TRACK', 'CANVAS', 'PORTAL', 'DIALOG']);
 const OK_ATTR = /^(style|class|data-[\w-]+|start|type|colspan|rowspan)$/i;
-const BAD_STYLE = /url\s*\(|expression\s*\(|javascript:|behavior\s*:|-moz-binding|@import/i;
+const BAD_STYLE = /\\|url\s*\(|image-set|expression\s*\(|javascript:|behavior\s*:|-moz-binding|@import/i; // 역슬래시(CSS 이스케이프)도 막는다
 
 export function sanitizeHtml(html) {
   if (!html) return '';

@@ -9,6 +9,7 @@ const { CSP } = require('./csp.cjs');
 const PORT = 47615;
 const ROOT = path.join(__dirname, '..', 'dist');
 const ORIGIN = `http://localhost:${PORT}`;
+const isApp = (u) => { try { return new URL(u).origin === ORIGIN; } catch { return false; } }; // 주소의 출처가 정확히 이 앱인가
 // 보안: 화면 파일에 붙이는 응답 머리말
 const HEADERS = {
   'Content-Security-Policy': CSP,
@@ -64,7 +65,7 @@ function sendFile(p) {
 
 // 앱 화면이 시작을 마치고 파일 받을 준비가 되면 알려 온다
 ipcMain.on('renderer-ready', (e) => {
-  if (!win || e.sender !== win.webContents || !e.senderFrame?.url.startsWith(ORIGIN)) return; // 앱 화면이 보낸 것만
+  if (!win || e.sender !== win.webContents || !isApp(e.senderFrame?.url)) return; // 앱 화면이 보낸 것만
   ready = true;
   pending.splice(0).forEach(sendFile);
 });
@@ -88,7 +89,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (e, url) => {
-    if (!url.startsWith(ORIGIN + '/')) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); }
+    if (!isApp(url)) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); }
   });
 
   // 닫기 전에 원고를 저장한다
@@ -129,8 +130,8 @@ if (!app.requestSingleInstanceLock()) {
     }
     // 권한: 클립보드(붙여넣기)·전체 화면만 허락하고 카메라·마이크·위치·알림 등은 모두 거절
     const OK = new Set(['clipboard-read', 'clipboard-sanitized-write', 'fullscreen']);
-    session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d) => cb(OK.has(perm) && (d?.requestingUrl || wc.getURL()).startsWith(ORIGIN)));
-    session.defaultSession.setPermissionCheckHandler((wc, perm, origin) => OK.has(perm) && String(origin).startsWith(ORIGIN));
+    session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d) => cb(OK.has(perm) && isApp(d?.requestingUrl || wc.getURL())));
+    session.defaultSession.setPermissionCheckHandler((wc, perm, origin) => OK.has(perm) && isApp(origin));
     createWindow();
     app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
   });

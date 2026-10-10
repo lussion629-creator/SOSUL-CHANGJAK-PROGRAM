@@ -1,7 +1,7 @@
 // Word(.docx) 열기·저장
 import mammoth from 'mammoth/mammoth.browser.js';
 import {
-  Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, PageBreak, Footer, PageNumber, LineRuleType, PageOrientation,
+  Document, Packer, Paragraph, TextRun, ShadingType, CommentRangeStart, CommentRangeEnd, CommentReference, HeadingLevel, AlignmentType, PageBreak, Footer, PageNumber, LineRuleType, PageOrientation,
 } from 'docx';
 import { htmlToBlocks } from './model.js';
 
@@ -15,11 +15,14 @@ export async function readDocx(arrayBuffer) {
 
 const ALIGN = { center: AlignmentType.CENTER, right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED, left: AlignmentType.LEFT };
 
-function runsToDocx(runs = [], base = {}) {
+// cm: 본문 주석을 Word 메모로 {num: id→번호, started: Set, last: id→마지막 자리, at: 지금 문단 자리}
+function runsToDocx(runs = [], base = {}, cm = null) {
   const out = [];
-  for (const r of runs) {
-    if (r.br) { out.push(new TextRun({ break: 1 })); continue; }
-    if (!r.text) continue;
+  runs.forEach((r, ri) => {
+    if (r.br) { out.push(new TextRun({ break: 1 })); return; }
+    if (!r.text) return;
+    const ids = cm ? (r.anno || []).filter((id) => cm.num.has(id)) : [];
+    for (const id of ids) if (!cm.started.has(id)) { cm.started.add(id); out.push(new CommentRangeStart(cm.num.get(id))); }
     out.push(new TextRun({
       text: r.text,
       bold: r.bold || base.bold,
@@ -27,12 +30,17 @@ function runsToDocx(runs = [], base = {}) {
       underline: r.underline ? {} : undefined,
       strike: r.strike,
       color: r.color ? r.color.replace('#', '') : undefined,
-      highlight: r.highlight ? 'yellow' : undefined,
+      shading: r.highlight ? { type: ShadingType.CLEAR, color: 'auto', fill: (/^#[0-9a-f]{6}$/i.test(r.highlight) ? r.highlight : '#fff2a8').slice(1) } : undefined, // 형광펜: 고른 색 그대로
       font: r.font || undefined,
       size: r.size ? Math.round(r.size * 2) : base.size,
-      characterSpacing: r.spacing != null && base.pt ? Math.round((r.size || base.pt) * r.spacing / 100 * 20) : undefined,
+      characterSpacing: r.spacingPt != null ? Math.round(r.spacingPt * 20) : r.spacing != null && base.pt ? Math.round((r.size || base.pt) * r.spacing / 100 * 20) : undefined,
     }));
-  }
+    for (const id of ids) {
+      if (cm.last.get(id) !== `${cm.at}:${ri}`) continue;
+      const n = cm.num.get(id);
+      out.push(new CommentRangeEnd(n), new TextRun({ children: [new CommentReference(n)] }));
+    }
+  });
   return out;
 }
 
@@ -65,7 +73,8 @@ export async function writeDocx(book, opt = {}) {
       else if (pf.first < 0) { indent.hanging = em(-pf.first); indent.left = (indent.left || 0) + em(-pf.first); }
     }
     const sp = { ...(spacing0 || {}) };
-    if (pf.line != null) Object.assign(sp, L ? { line: Math.round(pt * pf.line / 100 * 20), lineRule: LineRuleType.EXACT } : { line: Math.round(240 * pf.line / 100), lineRule: LineRuleType.AUTO });
+    if (pf.lineType) Object.assign(sp, { line: Math.round(pf.linePt * 20), lineRule: pf.lineType === 'min' ? LineRuleType.AT_LEAST : LineRuleType.EXACT });
+    else if (pf.line != null) Object.assign(sp, L ? { line: Math.round(pt * pf.line / 100 * 20), lineRule: LineRuleType.EXACT } : { line: Math.round(240 * pf.line / 100), lineRule: LineRuleType.AUTO });
     if (pf.before != null) sp.before = Math.round(pf.before * 20);
     if (pf.after != null) sp.after = Math.round(pf.after * 20);
     return { indent: Object.keys(indent).length ? indent : undefined, spacing: Object.keys(sp).length ? sp : undefined, wordWrap: pf.brk ? pf.brk !== 'char' : keepWord };
@@ -79,28 +88,45 @@ export async function writeDocx(book, opt = {}) {
     children.push(new Paragraph({ children: [new PageBreak()] }));
   }
 
+  // 본문 주석 → Word 메모: 각 주석이 처음 나오는 곳에서 범위를 열고 마지막에 닫는다
+  const chBlocks = book.chapters.map((ch) => htmlToBlocks(ch.html));
+  const cm = book.annos ? { num: new Map(), started: new Set(), last: new Map(), at: '' } : null;
+  const comments = [];
+  if (cm) {
+    chBlocks.forEach((bs, ci) => bs.forEach((b, bi) => (b.runs || []).forEach((r, ri) => (r.br || !r.text ? [] : r.anno || []).forEach((id) => {
+      if (!book.annos[id]) return;
+      if (!cm.num.has(id)) {
+        const a = book.annos[id];
+        cm.num.set(id, comments.length);
+        comments.push({ id: comments.length, author: a.author || '지은이', initials: (a.author || '지')[0], date: new Date(a.time || Date.now()), children: a.text.split('\n').map((t) => new Paragraph({ children: [new TextRun(t)] })) });
+      }
+      cm.last.set(id, `${ci}.${bi}:${ri}`);
+    }))));
+  }
   book.chapters.forEach((ch, i) => {
     if (i > 0) children.push(new Paragraph({ children: [new PageBreak()] }));
     if (opt.chapterTitles !== false && ch.title) {
       children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { after: 400 }, children: [new TextRun({ text: ch.title })] }));
     }
-    for (const b of htmlToBlocks(ch.html)) {
-      if (b.type === 'hr') { children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 200, after: 200 }, children: [new TextRun('*')] })); continue; }
+    chBlocks[i].forEach((b, bi) => {
+      if (cm) cm.at = `${i}.${bi}`;
+      if (b.type === 'hr') { children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 200, after: 200 }, children: [new TextRun('*')] })); return; }
       if (b.type === 'h1' || b.type === 'h2' || b.type === 'h3') {
         const lv = { h1: HeadingLevel.HEADING_1, h2: HeadingLevel.HEADING_2, h3: HeadingLevel.HEADING_3 }[b.type];
-        children.push(new Paragraph({ heading: lv, alignment: ALIGN[b.align], ...paraProps(b), children: runsToDocx(b.runs, rb) }));
-        continue;
+        children.push(new Paragraph({ heading: lv, alignment: ALIGN[b.align], ...paraProps(b), children: runsToDocx(b.runs, rb, cm) }));
+        return;
       }
       children.push(new Paragraph({
         alignment: ALIGN[b.align] || bodyAlign,
         ...paraProps(b, b.type === 'quote' ? { left: 720 } : (firstLine && b.align !== 'center' && b.align !== 'right' ? { firstLine } : undefined), spacing),
         bullet: b.type === 'li' && !b.ordered ? { level: 0 } : undefined,
-        children: runsToDocx(b.runs, rb),
+        children: runsToDocx(b.runs, rb, cm),
       }));
-    }
+    });
   });
 
   const doc = new Document({
+    ...(comments.length ? { comments: { children: comments } } : {}),
     creator: book.author || '',
     title: book.title,
     styles: {

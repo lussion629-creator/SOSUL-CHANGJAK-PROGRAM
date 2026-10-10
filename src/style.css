@@ -145,6 +145,20 @@ body.sb-hidden .main > .sidebar { visibility: hidden; overflow: hidden; border: 
 .ProseMirror hr.ProseMirror-selectednode { outline: 2px solid var(--accent); }
 .prose li p, .ProseMirror li p { text-indent: 0; }
 .ProseMirror mark, .prose mark { background: var(--hl); color: inherit; border-radius: 2px; }
+/* 어두운 화면: 어두운 글자 색은 밝은 글자색과 섞어 보여 준다 (원래 색은 저장·내보내기에 그대로) */
+@media screen { :root[data-theme="dark"] .ProseMirror [data-tc="dark"], :root[data-theme="dark"] .prose [data-tc="dark"] { color: color-mix(in srgb, var(--c) 45%, var(--ink)) !important; } }
+@media screen and (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="sepia"]) .ProseMirror [data-tc="dark"], :root:not([data-theme="light"]):not([data-theme="sepia"]) .prose [data-tc="dark"] { color: color-mix(in srgb, var(--c) 45%, var(--ink)) !important; } }
+/* 어두운 화면에서는 밝은 형광펜 위 글자를 어둡게 해 읽히게 */
+@media screen { :root[data-theme="dark"] .ProseMirror mark[data-color], :root[data-theme="dark"] .prose mark[data-color] { color: #1f1c18 !important; } }
+@media screen and (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="sepia"]) .ProseMirror mark[data-color], :root:not([data-theme="light"]):not([data-theme="sepia"]) .prose mark[data-color] { color: #1f1c18 !important; } }
+.hl-wrap { position: relative; display: inline-flex; align-items: center; }
+.hl-wrap #hlBtn svg path:last-child { stroke: var(--hl-pick, #e7c94a); stroke-width: 3.2; }
+.toolbar .hl-more { min-width: 16px; width: 16px; padding: 0; font-size: 10px; color: var(--ink3); }
+.hl-pop { position: fixed; min-width: 0; width: 212px; z-index: 210; } /* 서식 도구 줄이 옆으로 밀릴 때도 잘리지 않게 */
+.hl-pop.open { display: block; }
+.hl-pop .sw-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 4px; }
+.hl-pop .sw-row button { width: auto; height: 32px; border-radius: 6px; border: 1px solid var(--line); padding: 0; justify-content: center; align-items: center; font-size: 11px; color: #3b352d; }
+.hl-pop .sw-row button.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ProseMirror p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: var(--ink3); float: left; height: 0; pointer-events: none; text-indent: var(--ed-indent); }
 .search-hit { background: rgba(255, 200, 0, .35); border-radius: 2px; }
 .search-hit.cur { background: rgba(255, 140, 0, .7); }
@@ -444,7 +458,8 @@ ol.places del { background: var(--del-bg, rgba(180,71,61,.14)); color: inherit; 
 .size-box input { width: 46px; border: 0; background: none; text-align: center; font-variant-numeric: tabular-nums; padding: 0; height: 28px; color: var(--ink); }
 .size-box input:focus { outline: none; }
 .ls-box .ls-label { font-size: 12px; color: var(--ink2); padding-left: 6px; }
-.ls-box input { width: 34px; }
+.ls-box input { width: 44px; }
+.ls-pair { display: flex; gap: 6px; } .ls-pair input { flex: 1; min-width: 0; } .ls-pair select { flex: none; width: auto; }
 .size-box:focus-within { border-color: var(--accent); }
 /* ---------- 글꼴·단락 창 ---------- */
 .fmt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 12px; }
@@ -497,3 +512,83 @@ ol.places del { background: var(--del-bg, rgba(180,71,61,.14)); color: inherit; 
 .book-pages .book-ch { font-family: inherit; }
 .book-wait { text-align: center; }
 .st-sel { color: var(--accent); }
+
+/* ---------- 본문 주석 (색인·교정 제안·인용·의도) ---------- */
+:root { --k-index: #2f6fb3; --k-fix: #c2410c; --k-cite: #2f7d4f; --k-intent: #7a4fb0; --anno-hot: rgba(122, 75, 42, .12); }
+:root[data-theme="dark"] { --k-index: #7fb2ea; --k-fix: #f59a6b; --k-cite: #7fcf9d; --k-intent: #c3a3ef; --anno-hot: rgba(224, 168, 120, .16); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="sepia"]) { --k-index: #7fb2ea; --k-fix: #f59a6b; --k-cite: #7fcf9d; --k-intent: #c3a3ef; --anno-hot: rgba(224, 168, 120, .16); } }
+.ProseMirror .anno { border-bottom: 2px solid var(--kc); background: color-mix(in srgb, var(--kc) 10%, transparent); cursor: pointer; border-radius: 1px; }
+.ProseMirror .anno.k-index { --kc: var(--k-index); border-bottom-style: dotted; background: none; }
+.ProseMirror .anno.k-fix { --kc: var(--k-fix); text-decoration: underline wavy var(--k-fix) 1px; text-underline-offset: 3px; border-bottom: 0; }
+.ProseMirror .anno.k-cite { --kc: var(--k-cite); }
+.ProseMirror .anno.k-intent { --kc: var(--k-intent); }
+body.anno-off .ProseMirror .anno { border-bottom-color: transparent; background: none; text-decoration: none; }
+body.anno-off .ProseMirror .anno.k-fix { text-decoration: underline wavy var(--k-fix) 1px; text-underline-offset: 3px; }
+.paper-scroll { position: relative; }
+body.has-anno-rail:not(.anno-left) .paper-scroll { padding-right: 268px; }
+body.has-anno-rail.anno-left .paper-scroll { padding-left: 268px; }
+.anno-rail { position: absolute; top: 0; z-index: 3; }
+.anno-card { position: absolute; left: 0; right: 0; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--kc); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; line-height: 1.5; box-shadow: var(--shadow); cursor: pointer; transition: top .15s; }
+.anno-card.k-index { --kc: var(--k-index); } .anno-card.k-fix { --kc: var(--k-fix); } .anno-card.k-cite { --kc: var(--k-cite); } .anno-card.k-intent { --kc: var(--k-intent); }
+.anno-card.hot, .anno-card:focus { outline: 2px solid var(--kc); outline-offset: 1px; }
+.ac-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 4px; }
+.ac-kind { font-weight: 700; color: var(--kc); font-size: 11.5px; }
+.ac-who { color: var(--ink3); font-size: 11px; flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-fix del { color: var(--del); background: var(--del-bg); text-decoration: line-through; border-radius: 2px; }
+.ac-fix ins { color: var(--ins); background: var(--ins-bg); text-decoration: none; border-radius: 2px; }
+.ac-text { color: var(--ink2); white-space: pre-wrap; margin-top: 3px; overflow-wrap: anywhere; }
+.ac-src, .ac-term { color: var(--ink); }
+.ac-acts { display: flex; gap: 4px; margin-top: 6px; }
+.ac-acts button { font-size: 11.5px; padding: 3px 8px; border: 1px solid var(--line); background: var(--paper); border-radius: 5px; color: var(--ink2); }
+.ac-acts button[data-a="accept"] { border-color: var(--ins); color: var(--ins); font-weight: 600; }
+.ac-acts button:hover { background: var(--bg2); }
+.anno-pop { position: fixed; z-index: 220; width: min(300px, calc(100vw - 16px)); }
+.anno-pop .anno-card { position: static; }
+.anno-quote { padding: 8px 12px; background: var(--bg2); border-radius: 8px; font-family: var(--ed-font); color: var(--ink2); line-height: 1.6; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-radio input { position: absolute; opacity: 0; pointer-events: none; }
+.chip-radio span { display: inline-block; padding: 5px 12px; border: 1px solid var(--line); border-radius: 99px; font-size: 13px; cursor: pointer; background: var(--paper); }
+.chip-radio input:checked + span { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip-radio input:focus-visible + span { outline: 2px solid var(--accent); }
+.note-tools { display: flex; gap: 6px; padding: 0 12px 8px; }
+.note-list .anno-li .k { color: var(--kc); }
+.note-list .anno-li.k-index { --kc: var(--k-index); } .note-list .anno-li.k-fix { --kc: var(--k-fix); } .note-list .anno-li.k-cite { --kc: var(--k-cite); } .note-list .anno-li.k-intent { --kc: var(--k-intent); }
+.note-list .anno-li.dim { opacity: .6; }
+.ctx-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 8px; }
+.ctx-sub-l { font-size: 11.5px; color: var(--ink3); margin-right: 2px; }
+.menu .ctx-sub button { width: auto; padding: 4px 8px; border: 1px solid var(--line); font-size: 12.5px; }
+.ix-list { max-height: 60vh; overflow-y: auto; }
+.ix-head { margin: 12px 0 4px; font-size: 13px; color: var(--accent); border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.ix-row { display: flex; gap: 12px; justify-content: space-between; padding: 3px 0; font-size: 14px; }
+.ix-row span { color: var(--ink2); font-variant-numeric: tabular-nums; }
+@media print { .anno-rail { display: none !important; } }
+
+/* 단축키 설정 */
+.kb-list { max-height: 56vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px 12px 10px; }
+.kb-group { margin: 12px 0 4px; font-size: 12px; color: var(--accent); letter-spacing: .02em; }
+.kb-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.kb-label { flex: 1; min-width: 0; font-size: 14px; }
+.kb-key { min-width: 132px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font-variant-numeric: tabular-nums; font-size: 13px; text-align: center; }
+.kb-key i { color: var(--ink3); font-style: normal; }
+.kb-key.changed { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.kb-key.rec { border-color: var(--accent); background: var(--accent-bg); }
+.kb-reset { border: 0; background: none; color: var(--ink2); font-size: 15px; width: 28px; }
+.kb-reset:disabled { opacity: .25; }
+
+/* 장 목표 막대 */
+.chapter-list .ch-goal { width: 36px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; flex: none; }
+.chapter-list .ch-goal i { display: block; height: 100%; background: var(--accent); }
+.chapter-list .ch-goal.full i { background: var(--ins); }
+.ch-meta { gap: 8px; } .ch-meta .field { margin: 0; }
+/* 원고 다듬기 */
+.tidy-rules { display: grid; gap: 6px; }
+.tidy-rules small { display: block; }
+/* 인물 등장 지도 */
+.appear-wrap { overflow: auto; max-height: 60vh; border: 1px solid var(--line); border-radius: 8px; }
+.appear { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.appear th, .appear td { padding: 4px 6px; text-align: center; border-bottom: 1px solid var(--line); min-width: 26px; }
+.appear thead th { position: sticky; top: 0; background: var(--panel); color: var(--ink2); font-weight: 600; }
+.appear tbody th { text-align: left; white-space: nowrap; position: sticky; left: 0; background: var(--panel); font-weight: 600; }
+.appear tbody th small { color: var(--ink3); font-weight: 400; margin-right: 4px; }
+.appear td.hit { background: color-mix(in srgb, var(--accent) calc(var(--a) * 70%), transparent); cursor: pointer; color: var(--ink); }
+.appear td.sum { color: var(--ink2); font-weight: 600; }

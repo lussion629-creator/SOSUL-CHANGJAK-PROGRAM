@@ -57,7 +57,8 @@ export function applyPageView() {
     return;
   }
   const L = layoutOf();
-  const avail = Math.max(240, $('#paperScroll').clientWidth - 32);
+  const ps = $('#paperScroll'), pcs = getComputedStyle(ps);
+  const avail = Math.max(240, ps.clientWidth - parseFloat(pcs.paddingLeft) - parseFloat(pcs.paddingRight)); // 주석 여백 자리는 뺀다
   const W = mm2px(L.w);
   const z = app.settings.pvZoom === 'fit' || !app.settings.pvZoom ? Math.min(1.35, avail / W) : +app.settings.pvZoom / 100;
   const t = textCss(L, z);

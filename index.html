@@ -32,7 +32,7 @@
         <button data-act="open">파일 열기… <small>Word · 한글 · PDF · 텍스트</small></button>
         <button data-act="importChapter">현재 작품에 장으로 넣기…</button>
         <hr>
-        <button data-act="pageSetup">쪽 설정·템플릿… <small>F7</small></button>
+        <button data-act="pageSetup">쪽 설정·템플릿… <small data-kbd="pageSetup">F7</small></button>
         <button data-act="export">내보내기… <small>docx · doc · hwpx · PDF</small></button>
         <button data-act="print">인쇄 / PDF로 저장</button>
         <hr>
@@ -47,6 +47,7 @@
         <button data-act="focus">집중 모드</button>
         <button data-act="book">장 이어서 전체 보기 <small>모든 장을 한 번에</small></button>
         <button data-act="cork">코르크보드 (장 카드)</button>
+        <button data-act="annoSide">주석 여백 위치 <small>오른쪽·왼쪽·숨김</small></button>
         <hr>
         <button data-act="theme">다크 모드 전환</button>
         <button data-act="settings">글꼴·화면 설정</button>
@@ -55,16 +56,16 @@
     <div class="menu-wrap">
       <button class="menu-btn" data-menu="format">서식</button>
       <div class="menu" id="menu-format">
-        <button data-act="fontDlg">글꼴… <small>Ctrl+D</small></button>
-        <button data-act="paraDlg">단락… <small>Ctrl+Shift+P</small></button>
+        <button data-act="fontDlg">글꼴… <small data-kbd="fontDlg">Ctrl+D</small></button>
+        <button data-act="paraDlg">단락… <small data-kbd="paraDlg">Ctrl+Shift+P</small></button>
         <hr>
-        <button data-act="bigger">글자 0.5pt 크게 <small>Ctrl+]</small></button>
-        <button data-act="smaller">글자 0.5pt 작게 <small>Ctrl+[</small></button>
-        <button data-act="lsWide">자간 1% 넓게 <small>Alt+Shift+W</small></button>
-        <button data-act="lsNarrow">자간 1% 좁게 <small>Alt+Shift+N</small></button>
+        <button data-act="bigger">글자 0.5pt 크게 <small data-kbd="bigger">Ctrl+]</small></button>
+        <button data-act="smaller">글자 0.5pt 작게 <small data-kbd="smaller">Ctrl+[</small></button>
+        <button data-act="lsWide">자간 1% 넓게 <small data-kbd="lsWide">Alt+Shift+W</small></button>
+        <button data-act="lsNarrow">자간 1% 좁게 <small data-kbd="lsNarrow">Alt+Shift+N</small></button>
         <button data-act="lsReset">자간 기본으로</button>
         <hr>
-        <button data-act="pageSetup">쪽 설정·템플릿… <small>F7</small></button>
+        <button data-act="pageSetup">쪽 설정·템플릿… <small data-kbd="pageSetup">F7</small></button>
         <p class="menu-hint">원고에서 마우스 오른쪽 단추를 눌러도 글꼴·단락을 바꿀 수 있어요.</p>
       </div>
     </div>
@@ -72,13 +73,18 @@
       <button class="menu-btn" data-menu="tools">도구</button>
       <div class="menu" id="menu-tools">
         <button data-act="find">찾기 / 바꾸기</button>
+        <button data-act="annotate">주석 달기 <small data-kbd="annotate" data-kbd-prefix="색인·교정 제안·인용·의도">색인·교정 제안·인용·의도, Ctrl+Alt+M</small></button>
+        <button data-act="index">찾아보기 (색인 목록)</button>
         <button data-act="analyze">퇴고 도우미 (반복어·긴 문장)</button>
+        <button data-act="tidy">원고 다듬기 <small>문장부호·띄어쓰기 정리</small></button>
+        <button data-act="appear">인물 등장 지도 <small>장마다 몇 번 나오나</small></button>
         <button data-act="speak">소리 내어 읽기 <small>Esc로 멈춤</small></button>
         <button data-act="stats">하루 기록 그래프 <small>쓴·고친·지운 양</small></button>
         <button data-act="goals">목표</button>
         <button data-act="sprint">타이머 (글쓰기 스프린트)</button>
         <button data-act="snapshot">지금 버전 저장 (이름 붙이기)</button>
         <button data-act="recover">실수 되돌리기 · 복구 <small>휴지통</small></button>
+        <button data-act="keys">단축키 설정</button>
         <hr>
         <button data-act="drive">구글 드라이브 연결</button>
       </div>
@@ -132,7 +138,7 @@
     <span class="size-box ls-box" title="자간 (%). 글자를 고르지 않으면 커서가 있는 문단 전체에 적용. Alt+Shift+N 좁게, Alt+Shift+W 넓게">
       <span class="ls-label" aria-hidden="true">자간</span>
       <button type="button" data-ls="-1" aria-label="자간 1% 좁게">−</button>
-      <input id="letterSpacing" inputmode="numeric" placeholder="0" aria-label="자간 (%)" autocomplete="off">
+      <input id="letterSpacing" placeholder="0" aria-label="자간 (% 또는 pt)" autocomplete="off">
       <button type="button" data-ls="1" aria-label="자간 1% 넓게">+</button>
     </span>
     <datalist id="fontSizes"><option value="7"><option value="7.5"><option value="8"><option value="8.5"><option value="9"><option value="9.5"><option value="10"><option value="10.5"><option value="11"><option value="11.5"><option value="12"><option value="12.5"><option value="13"><option value="13.5"><option value="14"><option value="15"><option value="16"><option value="18"><option value="20"><option value="22"><option value="24"><option value="28"><option value="32"><option value="36"></datalist>
@@ -142,7 +148,7 @@
     <button data-cmd="underline" title="밑줄 (Ctrl+U)"><u>가</u></button>
     <button data-cmd="strike" title="취소선"><s>가</s></button>
     <label class="color-btn" title="글자 색"><span>가</span><input type="color" id="textColor" value="#c0392b"></label>
-    <button data-cmd="highlight" title="형광펜"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 11 6-6 4 4-6 6"/><path d="M9 11 6 18h5l2-3"/><path d="M4 21h16"/></svg></button>
+    <span class="hl-wrap"><button data-cmd="highlight" title="형광펜 (마지막에 고른 색)" id="hlBtn"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 11 6-6 4 4-6 6"/><path d="M9 11 6 18h5l2-3"/><path d="M4 21h16"/></svg></button><button type="button" class="hl-more" id="hlMore" title="형광펜 색 고르기" aria-label="형광펜 색 고르기" aria-haspopup="true">▾</button><div class="menu hl-pop" id="hlPop" role="menu"></div></span>
     <span class="tsep"></span>
     <button data-cmd="left" title="왼쪽 정렬"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg></button>
     <button data-cmd="center" title="가운데 정렬"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg></button>
@@ -155,6 +161,7 @@
     <button data-cmd="clear" title="서식 지우기"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3 13M9 4h9M3 20 21 4"/></svg></button>
     <span class="tsep"></span>
     <button data-act="find" title="찾기 / 바꾸기 (Ctrl+F)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg></button>
+    <button data-act="annotate" title="주석 달기: 색인·교정 제안·인용·의도 (Ctrl+Alt+M)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9 10h6M9 14h4"/></svg></button>
     <button data-act="snapshot" title="지금 버전 저장 (이름 붙이기)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
   </div>
 
@@ -175,13 +182,15 @@
         <div class="tab-foot">
           <label>이 장 줄거리</label>
           <textarea id="chapterSynopsis" rows="3" placeholder="이 장에서 일어나는 일 (코르크보드 카드에 표시)"></textarea>
-          <label>상태</label>
-          <select id="chapterStatus">
+          <div class="row2 ch-meta">
+            <label class="field"><span>상태</span><select id="chapterStatus">
             <option value="idea">구상</option>
             <option value="draft">초고</option>
             <option value="revise">퇴고 중</option>
             <option value="done">완료</option>
-          </select>
+          </select></label>
+            <label class="field"><span>목표 분량 (자)</span><input id="chapterGoal" type="number" min="0" step="500" placeholder="없음"></label>
+          </div>
         </div>
       </section>
       <section class="tab" id="tab-notes" hidden>
@@ -194,10 +203,18 @@
             <option value="item">사물·용어</option>
             <option value="plot">플롯·복선</option>
             <option value="memo">메모</option>
+            <optgroup label="본문 주석">
+              <option value="anno">주석 전체</option>
+              <option value="index">색인</option>
+              <option value="fix">교정 제안</option>
+              <option value="cite">인용</option>
+              <option value="intent">의도</option>
+            </optgroup>
           </select>
           <button class="small" data-act="addNote">+ 새 자료</button>
         </div>
         <input id="noteSearch" class="search" placeholder="자료 검색">
+        <div class="note-tools"><button class="small" data-act="index">찾아보기 (색인)</button><button class="small" data-act="annotate">+ 주석 달기</button></div>
         <ul id="noteList" class="note-list"></ul>
       </section>
       <section class="tab" id="tab-history" hidden>

@@ -37,6 +37,8 @@ function pfOf(el) {
     const v = el.getAttribute(`data-${d}`);
     if (v !== null && v !== '' && !Number.isNaN(+v)) pf[k] = +v;
   }
+  const lt = el.getAttribute('data-lt'), lpt = +el.getAttribute('data-lpt');
+  if (/^(fixed|min)$/.test(lt || '') && lpt > 0) { pf.lineType = lt; pf.linePt = lpt; delete pf.line; }
   const b = el.getAttribute('data-brk');
   if (b) pf.brk = b;
   return Object.keys(pf).length ? pf : undefined;
@@ -59,13 +61,16 @@ function runsOf(el, fmt = {}) {
     if (t === 'em' || t === 'i') f.italic = true;
     if (t === 'u') f.underline = true;
     if (t === 's' || t === 'del' || t === 'strike') f.strike = true;
-    if (t === 'mark') f.highlight = n.getAttribute('data-color') || n.style.backgroundColor || '#fff59d';
+    if (n.hasAttribute('data-anno')) f.anno = [...(f.anno || []), n.getAttribute('data-anno')]; // 본문 주석 (Word 메모로 내보낼 때)
+    if (t === 'mark') f.highlight = toHex(n.getAttribute('data-color') || n.style.backgroundColor) || '#fff2a8';
     if (n.style) {
       if (n.style.color) f.color = toHex(n.style.color);
       if (n.style.fontFamily) f.font = fontName(n.style.fontFamily.split(',')[0].trim().replace(/"/g, "'"));
       const fs = n.getAttribute('data-fs') || (/calc/.test(n.style.fontSize) ? '' : n.style.fontSize);
       if (fs) { const pt = parseFloat(fs); if (pt) f.size = fs.endsWith('px') ? pt * 0.75 : fs.endsWith('pt') ? pt : f.size; }
-      if (n.style.letterSpacing && n.style.letterSpacing.endsWith('em')) f.spacing = Math.round(parseFloat(n.style.letterSpacing) * 100);
+      const ls = n.getAttribute('data-ls');
+      if (ls && /^-?\d+(\.\d+)?pt$/.test(ls)) { f.spacingPt = parseFloat(ls); delete f.spacing; } // Word 방식 자간 (pt)
+      else if (n.style.letterSpacing && n.style.letterSpacing.endsWith('em')) { f.spacing = Math.round(parseFloat(n.style.letterSpacing) * 100); delete f.spacingPt; }
       if (n.style.fontWeight === 'bold' || +n.style.fontWeight >= 600) f.bold = true;
     }
     runs.push(...runsOf(n, f));

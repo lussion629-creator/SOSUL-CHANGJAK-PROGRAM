@@ -3,7 +3,10 @@ import { app } from './app.js';
 import { FONTS } from './fonts.js';
 import { layoutOf } from './layout.js';
 import { isPageView } from './pageview.js';
-import { PARA_KEYS, runCommand } from './editor.js';
+import { PARA_KEYS, runCommand, HL_COLORS, hlColor, setHlColor, hexOf } from './editor.js';
+import { saveSettings } from './app.js';
+import { keyOf, pretty } from './keys.js';
+const kb = (id) => pretty(keyOf(id));
 import { $, h, toast, dialog } from './ui.js';
 
 // ---------- 글자 크기 ----------
@@ -31,10 +34,20 @@ export function showSizeInBox() {
   box.placeholder = v ? '크기' : fmtPt(currentSize());
 }
 
-// ---------- 자간 (글자 사이 간격, %) ----------
+// ---------- 자간 (글자 사이 간격: 한글 방식 %, Word 방식 pt) ----------
 // 고른 글자에 적용한다. 아무것도 고르지 않았으면 커서가 있는 문단 전체에 적용한다
 // (한 줄 넘친 문단을 살짝 좁혀 줄을 맞출 때 쓰기 좋게).
 const clampLs = (n) => Math.max(-50, Math.min(50, Math.round(n)));
+const isPt = (v) => typeof v === 'string' && /pt$/.test(v);
+const fmtLsPt = (n) => `${Math.round(Math.max(-20, Math.min(20, n)) * 10) / 10}pt`;
+// 입력 값 → 저장 값: '0.5pt' → '0.5pt'(Word 방식), '-3' 또는 '-3%' → -3(한글 방식)
+export function parseSpacing(s) {
+  s = String(s ?? '').trim().replace(/\s+/g, '');
+  if (!s) return null;
+  if (/pt$/i.test(s)) { const n = parseFloat(s); return Number.isFinite(n) ? fmtLsPt(n) : undefined; }
+  const n = parseFloat(s.replace(/%$/, ''));
+  return Number.isFinite(n) ? clampLs(n) : undefined;
+}
 export function currentSpacing() {
   const v = app.editor.getAttributes('textStyle').letterSpacing;
   if (v != null) return v;
@@ -54,7 +67,7 @@ export function setSpacing(v) {
   const ed = app.editor;
   const r = spacingRange();
   if (r.from === r.to) { toast('자간을 바꿀 글자가 없어요.'); return; }
-  const val = v === '' || v == null ? null : clampLs(+v);
+  const val = v === '' || v == null ? null : isPt(v) ? v : clampLs(+v);
   const sel = ed.state.selection;
   ed.chain().focus().setTextSelection({ from: r.from, to: r.to }).setMark('textStyle', { letterSpacing: val }).removeEmptyTextStyle()
     .setTextSelection({ from: sel.from, to: sel.to }).run();
@@ -65,16 +78,19 @@ export function stepSpacing(d) {
   const ed = app.editor;
   // 문단 전체일 때는 문단 첫 글자의 자간을 기준으로
   const base = r.whole ? (ed.state.doc.nodeAt(r.from)?.marks.find((m) => m.type.name === 'textStyle')?.attrs.letterSpacing ?? currentSpacing()) : currentSpacing();
-  const n = clampLs(base + d);
+  // pt로 정해 둔 글자는 0.1pt씩, 나머지는 1%씩
+  const n = isPt(base) ? fmtLsPt(parseFloat(base) + d / 10) : clampLs(base + d);
   setSpacing(n);
-  toast(`${r.whole ? '이 문단' : '고른 글자'} 자간 ${n}%`, 1200);
+  toast(`${r.whole ? '이 문단' : '고른 글자'} 자간 ${isPt(n) ? n : n + '%'}`, 1200);
 }
 export function showSpacingInBox() {
   const box = $('#letterSpacing');
   if (!box || document.activeElement === box) return;
   const v = app.editor.getAttributes('textStyle').letterSpacing;
   box.value = v == null ? '' : String(v);
-  box.placeholder = String(currentSpacing());
+  const c = currentSpacing();
+  box.placeholder = String(isPt(c) ? c : c);
+  box.title = '자간: 숫자만 넣으면 % (한글 방식), 0.5pt처럼 넣으면 pt (Word 방식)';
 }
 
 // ---------- 글꼴 창 ----------
@@ -83,6 +99,9 @@ export async function showFontDialog() {
   const ts = ed.getAttributes('textStyle');
   const size = currentSize();
   const has = (m) => ed.isActive(m);
+  const curColor = hexOf(ts.color) || null; // 색 고르개는 #rrggbb만 받는다
+  const lsPt = isPt(ts.letterSpacing);
+  const lsVal = ts.letterSpacing == null ? '' : lsPt ? parseFloat(ts.letterSpacing) : ts.letterSpacing;
   const fontOpts = [['', '기본 (쪽 설정·환경 설정 글꼴)'], ...FONTS.map((f) => [f[0], f[1]])];
   const cur = ts.fontFamily || '';
   if (cur && !fontOpts.some((f) => f[0] === cur)) fontOpts.push([cur, cur.replace(/['"]/g, '')]);
@@ -91,8 +110,8 @@ export async function showFontDialog() {
     body: `<div class="fmt-grid">
       <label class="field"><span>글꼴</span><select name="font">${fontOpts.map(([v, l]) => `<option value="${h(v)}" ${v === cur ? 'selected' : ''}>${h(l)}</option>`).join('')}</select></label>
       <label class="field"><span>크기 (pt)</span><input name="size" type="number" step="0.5" min="1" max="400" value="${fmtPt(size)}"></label>
-      <label class="field"><span>자간 (%)</span><input name="ls" type="number" step="1" min="-50" max="50" value="${ts.letterSpacing ?? ''}" placeholder="기본"></label>
-      <label class="field"><span>글자 색</span><span class="fmt-color"><input name="color" type="color" value="${h(ts.color || '#222222')}"><label class="check"><input type="checkbox" name="nocolor" ${ts.color ? '' : 'checked'}> 기본 색</label></span></label>
+      <label class="field"><span>자간</span><span class="ls-pair"><input name="ls" type="number" step="${lsPt ? 0.1 : 1}" value="${lsVal}" placeholder="기본"><select name="lsUnit" aria-label="자간 단위"><option value="pct" ${lsPt ? '' : 'selected'}>% (한글)</option><option value="pt" ${lsPt ? 'selected' : ''}>pt (Word)</option></select></span></label>
+      <label class="field"><span>글자 색</span><span class="fmt-color"><input name="color" type="color" value="${h(curColor || '#222222')}"><label class="check"><input type="checkbox" name="nocolor" ${curColor ? '' : 'checked'}> 기본 색</label></span></label>
     </div>
     <div class="fmt-checks">
       <label class="check"><input type="checkbox" name="b" ${has('bold') ? 'checked' : ''}> <b>굵게</b></label>
@@ -108,7 +127,8 @@ export async function showFontDialog() {
       const upd = () => {
         prev.style.fontFamily = f.font.value ? `${f.font.value}, serif` : '';
         prev.style.fontSize = `${Math.min(28, +f.size.value || size) * (96 / 72)}px`;
-        prev.style.letterSpacing = f.ls.value === '' ? '' : `${+f.ls.value / 100}em`;
+        prev.style.letterSpacing = f.ls.value === '' ? '' : f.lsUnit.value === 'pt' ? `${+f.ls.value}pt` : `${+f.ls.value / 100}em`;
+        f.ls.step = f.lsUnit.value === 'pt' ? 0.1 : 1;
         prev.style.color = f.nocolor.checked ? '' : f.color.value;
         prev.style.fontWeight = f.b.checked ? '700' : '';
         prev.style.fontStyle = f.i.checked ? 'italic' : '';
@@ -130,10 +150,10 @@ export async function showFontDialog() {
   const attrs = {};
   if (f.font.value !== cur) attrs.fontFamily = f.font.value || null;
   if (sz && sz !== size) attrs.fontSize = `${fmtPt(sz)}pt`;
-  const ls = f.ls.value === '' ? null : Math.max(-50, Math.min(50, +f.ls.value));
+  const ls = f.ls.value === '' ? null : parseSpacing(f.ls.value + (f.lsUnit.value === 'pt' ? 'pt' : ''));
   if (ls !== (ts.letterSpacing ?? null)) attrs.letterSpacing = ls;
   const color = f.nocolor.checked ? null : f.color.value;
-  if (color !== (ts.color || null)) attrs.color = color;
+  if (color !== curColor) attrs.color = color;
   const c = ed.chain().focus();
   if (Object.keys(attrs).length) c.setMark('textStyle', attrs);
   const tog = (on, was, set, unset) => { if (on !== was) (on ? set : unset)(); };
@@ -165,6 +185,8 @@ export async function showParaDialog() {
     line: pv ? L.line : Math.round((app.settings.lineHeight || 1.9) * 100),
     first: pv ? L.indent : app.settings.indent ? 1 : 0,
   };
+  const lineKind = a.lineType && a.linePt != null ? a.lineType : a.line != null ? 'pct' : 'default';
+  const size = layoutOf().size || 10;
   const firstKind = a.first == null ? 'default' : a.first === 0 ? 'none' : a.first > 0 ? 'indent' : 'hang';
   const v = (x) => (x == null ? '' : x);
   const r = await dialog({
@@ -189,7 +211,13 @@ export async function showParaDialog() {
           <label class="field"><span>첫 줄 값 (글자)</span><input name="firstVal" type="number" step="0.5" min="0" max="20" value="${a.first ? Math.abs(a.first) : 1}"></label>
         </div></fieldset>
         <fieldset><legend>간격</legend><div class="fmt-grid">
-          <label class="field"><span>줄 간격 (%)</span><input name="line" type="number" step="5" min="80" max="400" value="${v(a.line)}" placeholder="기본 ${base.line}"></label>
+          <label class="field"><span>줄 간격</span><select name="lineKind">
+            <option value="default" ${lineKind === 'default' ? 'selected' : ''}>기본 (${base.line}%)</option>
+            <option value="pct" ${lineKind === 'pct' ? 'selected' : ''}>비율 (%, 글자에 따라)</option>
+            <option value="fixed" ${lineKind === 'fixed' ? 'selected' : ''}>고정 값 (pt)</option>
+            <option value="min" ${lineKind === 'min' ? 'selected' : ''}>최소 (pt)</option>
+          </select></label>
+          <label class="field"><span>값 <small data-line-unit>${lineKind === 'fixed' || lineKind === 'min' ? 'pt' : '%'}</small></span><input name="lineVal" type="number" step="${lineKind === 'fixed' || lineKind === 'min' ? 0.5 : 5}" value="${lineKind === 'fixed' || lineKind === 'min' ? a.linePt : a.line ?? base.line}"></label>
           <label class="field"><span>문단 위 (pt)</span><input name="before" type="number" step="1" min="0" max="200" value="${v(a.before)}" placeholder="0"></label>
           <label class="field"><span>문단 아래 (pt)</span><input name="after" type="number" step="1" min="0" max="200" value="${v(a.after)}" placeholder="기본"></label>
           <label class="field"><span>줄 나눔</span><select name="brk">
@@ -205,6 +233,21 @@ export async function showParaDialog() {
     onOpen: (f) => {
       const p = f.querySelector('.pp-this');
       const upd = () => {
+        // 줄 간격 종류를 바꾸면 값 칸의 단위와 값을 먼저 바꾼다 (입력한 값을 이어받아 %↔pt 환산)
+        const k = f.lineKind.value, pt = k === 'fixed' || k === 'min';
+        const was = f.lineVal.dataset.kind;
+        if (was !== k) {
+          const wasPt = was === 'fixed' || was === 'min';
+          const v = +f.lineVal.value;
+          if (was && pt && !wasPt) f.lineVal.value = Math.round(size * (was === 'pct' && v ? v : base.line) / 100 * 2) / 2;
+          else if (was && !pt && wasPt) f.lineVal.value = Math.round(((v || size * base.line / 100) / size) * 100 / 5) * 5;
+          else if (was === 'default' && pt) f.lineVal.value = Math.round(size * base.line / 100 * 2) / 2;
+          else if (was === 'default') f.lineVal.value = base.line;
+          f.lineVal.dataset.kind = k;
+        }
+        f.querySelector('[data-line-unit]').textContent = pt ? 'pt' : '%';
+        f.lineVal.step = pt ? 0.5 : 5;
+        f.lineVal.disabled = k === 'default';
         const x = read(f);
         p.style.textAlign = f.align.value || '';
         p.style.marginLeft = x.indL != null ? `${x.indL}em` : '';
@@ -212,7 +255,7 @@ export async function showParaDialog() {
         const first = x.first ?? base.first;
         p.style.textIndent = `${first}em`;
         p.style.paddingLeft = first < 0 ? `${-first}em` : '';
-        p.style.lineHeight = String((x.line ?? base.line) / 100);
+        p.style.lineHeight = x.lineType ? String(Math.max(x.linePt / size, x.lineType === 'min' ? 1.2 : 0.5)) : String((x.line ?? base.line) / 100); // 미리보기: 원고 글자 크기에 대한 비율로
         p.style.marginTop = x.before != null ? `${x.before * 0.6}px` : '';
         p.style.marginBottom = x.after != null ? `${x.after * 0.6}px` : '';
         p.style.wordBreak = x.brk === 'char' ? 'break-all' : 'keep-all';
@@ -239,15 +282,54 @@ export async function showParaDialog() {
   c.run();
 }
 
+function lineOf(f) {
+  const k = f.lineKind.value, v = +f.lineVal.value;
+  if (k === 'pct' && v) return { line: Math.max(50, Math.min(500, Math.round(v))), lineType: null, linePt: null };
+  if ((k === 'fixed' || k === 'min') && v) return { line: null, lineType: k, linePt: Math.max(1, Math.min(400, Math.round(v * 2) / 2)) };
+  return { line: null, lineType: null, linePt: null };
+}
 function read(f) {
   const n = (el, lo, hi) => (el.value === '' ? null : Math.max(lo, Math.min(hi, +el.value)));
   const fv = Math.abs(+f.firstVal.value || 0);
   return {
     indL: n(f.indL, 0, 40), indR: n(f.indR, 0, 40),
     first: { default: null, none: 0, indent: fv, hang: -fv }[f.firstKind.value],
-    line: n(f.line, 80, 400), before: n(f.before, 0, 200), after: n(f.after, 0, 200),
+    ...lineOf(f), before: n(f.before, 0, 200), after: n(f.after, 0, 200),
     brk: f.brk.value || null,
   };
+}
+
+// ---------- 형광펜 색 ----------
+export function bindHighlight() {
+  const pop = $('#hlPop'), more = $('#hlMore');
+  if (!pop) return;
+  const pick = (c) => { setHlColor(c); $('#hlBtn').style.setProperty('--hl-pick', c); };
+  pick(app.settings.hlColor && HL_COLORS.some(([c]) => c === app.settings.hlColor) ? app.settings.hlColor : HL_COLORS[0][0]);
+  const draw = () => {
+    const cur = app.editor.getAttributes('highlight').color;
+    pop.innerHTML = `<div class="sw-row">${HL_COLORS.map(([c, n]) => `<button type="button" data-hl="${c}" class="${c === cur ? 'on' : ''}" style="background:${c}" title="${n}">${n}</button>`).join('')}</div>
+      <button type="button" data-hl="">형광펜 지우기</button>`;
+  };
+  more.addEventListener('click', (e) => {
+    e.stopPropagation(); draw();
+    const r = more.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(r.left - 160, innerWidth - 220)) + 'px';
+    pop.style.top = r.bottom + 4 + 'px';
+    pop.classList.toggle('open');
+  });
+  pop.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-hl]');
+    if (!b) return;
+    e.stopPropagation();
+    pop.classList.remove('open');
+    if (!b.dataset.hl) { runCommand(app.editor, 'unhighlight'); return; }
+    pick(b.dataset.hl);
+    app.settings.hlColor = b.dataset.hl;
+    saveSettings();
+    if (app.editor.state.selection.empty) { toast('형광펜 색을 바꿨어요. 글을 고르고 형광펜 단추를 누르세요.', 2000); return; }
+    app.editor.chain().focus().setHighlight({ color: b.dataset.hl }).run();
+  });
+  addEventListener('mousedown', (e) => { if (!pop.contains(e.target) && e.target !== more) pop.classList.remove('open'); });
 }
 
 // ---------- 마우스 오른쪽 메뉴 ----------
@@ -269,16 +351,20 @@ export function bindContextMenu() {
     const at = ed().view.posAtCoords({ left: e.clientX, top: e.clientY });
     if (at && (at.pos < from || at.pos > to || from === to)) ed().commands.setTextSelection(at.pos);
     const sel = ed().state.doc.textBetween(ed().state.selection.from, ed().state.selection.to, ' ').trim();
+    const annoHere = ed().state.selection.$from.marks().find((m) => m.type.name === 'anno')?.attrs.id || '';
+    menu.dataset.anno = annoHere;
     const word = sel ? (sel.length <= 20 && sel.split(/\s+/).length <= 3 ? sel : '') : wordAt();
     menu.innerHTML = `
       <button data-c="cut" ${sel ? '' : 'disabled'}><span>잘라내기</span><small>Ctrl+X</small></button>
       <button data-c="copy" ${sel ? '' : 'disabled'}><span>복사</span><small>Ctrl+C</small></button>
       <button data-c="paste"><span>붙여넣기</span><small>Ctrl+V</small></button>
       <hr>
-      <button data-c="font"><span>글꼴…</span><small>Ctrl+D</small></button>
-      <button data-c="para"><span>단락…</span><small>Ctrl+Shift+P</small></button>
-      <button data-c="lsNarrow"><span>자간 좁게 (${sel ? '고른 글자' : '이 문단'})</span><small>Alt+Shift+N</small></button>
-      <button data-c="lsWide"><span>자간 넓게 (${sel ? '고른 글자' : '이 문단'})</span><small>Alt+Shift+W</small></button>
+      <button data-c="font"><span>글꼴…</span><small>${kb('fontDlg')}</small></button>
+      <button data-c="para"><span>단락…</span><small>${kb('paraDlg')}</small></button>
+      ${sel ? `<div class="ctx-sub"><span class="ctx-sub-l">주석</span><button data-c="a-index">색인</button><button data-c="a-fix">교정 제안</button><button data-c="a-cite">인용</button><button data-c="a-intent">의도</button></div><hr>` : ''}
+      ${annoHere ? `<button data-c="a-open"><span>이 주석 보기·고치기</span></button><hr>` : ''}
+      <button data-c="lsNarrow"><span>자간 좁게 (${sel ? '고른 글자' : '이 문단'})</span><small>${kb('lsNarrow')}</small></button>
+      <button data-c="lsWide"><span>자간 넓게 (${sel ? '고른 글자' : '이 문단'})</span><small>${kb('lsWide')}</small></button>
       <button data-c="clear"><span>서식 지우기</span></button>
       <hr>
       ${word ? `<button data-c="dict"><span>‘${h(word.slice(0, 12))}${word.length > 12 ? '…' : ''}’ 사전에서 찾기</span><small>표준국어대사전</small></button>` : ''}
@@ -311,6 +397,8 @@ export function bindContextMenu() {
     } else if (c === 'font') showFontDialog();
     else if (c === 'para') showParaDialog();
     else if (c === 'clear') runCommand(ed(), 'clear');
+    else if (c.startsWith('a-') && c !== 'a-open') { const { addAnnotation } = await import('./annotate.js'); addAnnotation(c.slice(2)); }
+    else if (c === 'a-open') { const { editAnno } = await import('./annotate.js'); editAnno(menu.dataset.anno); }
     else if (c === 'lsNarrow' || c === 'lsWide') stepSpacing(c === 'lsWide' ? 1 : -1);
     else if (c === 'scene') runCommand(ed(), 'scene');
     else if (c === 'dict') window.open(`https://stdict.korean.go.kr/search/searchResult.do?searchKeyword=${encodeURIComponent(menu.dataset.word)}`, '_blank', 'noopener');

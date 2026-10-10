@@ -6,6 +6,7 @@ import { EditorState } from '@tiptap/pm/state';
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { countHtml, countText, fmt } from './stats.js';
 import { parseHtml, sanitizeHtml } from './sanitize.js';
+import { chapterGoalHtml } from './goal.js';
 import { editAmounts, summarize, summaryLine, where, esc } from './diff.js';
 import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, promptDlg } from './ui.js';
 
@@ -306,7 +307,7 @@ export function renderBinder() {
     const n = (c._count || countHtml(c.html)).withSpace;
     return `<li draggable="true" data-id="${id}" class="${id === app.cur ? 'on' : ''}">
       <span class="dot ${c.status || 'draft'}" title="${STATUS[c.status] || '초고'}"></span>
-      <span class="t">${h(c.title || `${i + 1}장`)}</span><span class="n">${fmt(n)}</span>
+      <span class="t">${h(c.title || `${i + 1}장`)}</span>${chapterGoalHtml(c, n)}<span class="n">${fmt(n)}</span>
       <button class="more" data-more="${id}" title="장 메뉴">⋯</button></li>`;
   }).join('');
   $('#projectCount').textContent = `${app.project.order.length}개 장`;
@@ -314,7 +315,11 @@ export function renderBinder() {
 function renderBinderCounts() {
   const c = app.chapters.get(app.cur);
   const li = $(`#chapterList li[data-id="${app.cur}"] .n`);
-  if (li && c._count) li.textContent = fmt(c._count.withSpace);
+  if (li && c._count) {
+    li.textContent = fmt(c._count.withSpace);
+    const g = li.parentElement.querySelector('.ch-goal');
+    if (g) g.outerHTML = chapterGoalHtml(c, c._count.withSpace);
+  }
 }
 
 let adding = false;
@@ -347,6 +352,7 @@ export async function chapterMenu(id) {
       <button class="proj" value="up"><div class="info"><b>위로 옮기기</b></div></button>
       <button class="proj" value="down"><div class="info"><b>아래로 옮기기</b></div></button>
       <button class="proj" value="merge"><div class="info"><b>다음 장과 합치기</b></div></button>
+      ${id === app.cur ? '<button class="proj" value="split"><div class="info"><b>커서 자리에서 장 나누기</b><small>커서가 있는 문단부터 새 장으로</small></div></button>' : ''}
       <button class="proj" value="delete"><div class="info"><b style="color:var(--del)">삭제</b><small>이 장과 버전 기록을 지웁니다</small></div></button>
     </div>`,
     buttons: [],
@@ -355,6 +361,9 @@ export async function chapterMenu(id) {
   if (r.value === 'rename') {
     const t = await promptDlg('장 이름 바꾸기', '장 제목', c.title);
     if (t) { c.title = t; await S.putChapter(c); if (id === app.cur) $('#chapterTitle').value = t; }
+  } else if (r.value === 'split') {
+    const { splitChapterAtCursor } = await import('./tools.js');
+    await splitChapterAtCursor();
   } else if (r.value === 'dup') {
     if (id === app.cur) await saveNow();
     await addChapter(c.title + ' (사본)', c.html, id);

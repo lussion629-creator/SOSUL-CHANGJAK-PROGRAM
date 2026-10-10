@@ -10,6 +10,7 @@ import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, d
 import { setSearch, gotoMatch, findMatches } from './editor.js';
 import { $, $$, h, toast, dialog, confirmDlg, promptDlg, ago, fullTime } from './ui.js';
 import { parseHtml, sanitizeHtml } from './sanitize.js';
+import { isAnno, annoListItem, editAnno, annosForExport } from './annotate.js';
 import { layoutOf, fontName, textCss, readHwpxLayout } from './layout.js';
 import { showPageSetup, layoutSummary } from './pagesetup.js';
 
@@ -174,6 +175,7 @@ export async function showExport() {
       <div class="ps-sum"><span>쪽 설정</span><b>${h(layoutSummary())}</b><button type="button" class="small" data-open-setup>바꾸기</button></div>
       <label class="check"><input type="checkbox" name="titlePage" checked> 표지 (제목·지은이)</label>
       <label class="check"><input type="checkbox" name="chapterTitles" checked> 장 제목 넣기 (장마다 새 쪽)</label>
+      <label class="check"><input type="checkbox" name="annos" checked> 본문 주석(교정 제안·인용·의도·색인)을 Word 메모로 넣기 <small class="hint">(.docx만)</small></label>
       <label class="field"><span>지은이 (표지에 표시)</span><input name="author" value="${h(app.settings.author)}" placeholder="필명"></label>
       ${drive ? '<label class="check"><input type="checkbox" name="toDrive"> 구글 드라이브에도 저장 (Word는 Google 문서로 변환)</label>' : '<p class="hint" style="margin:0">구글 드라이브에 연결하면 내보낸 파일을 드라이브에도 바로 넣을 수 있어요.</p>'}
       <p class="hint" style="margin:0">.doc는 Word와 한글이 그대로 여는 RTF 방식으로 저장됩니다. .hwp(옛 한글 형식)로 저장하는 기능은 공개된 방법이 없어 .hwpx로 저장합니다. 한글에서 .hwpx를 연 뒤 ‘다른 이름으로 저장’하면 .hwp로 바꿀 수 있어요.</p>`,
@@ -185,6 +187,7 @@ export async function showExport() {
   app.settings.author = f.author.value.trim();
   saveSettings();
   const book = bookOf(f.range.value);
+  if (f.annos.checked && f.fmt.value === 'docx') book.annos = await annosForExport();
   const L = layoutOf();
   const opt = { layout: { ...L, fontName: fontName(L.font) }, size: L.size, lineHeight: L.line / 100, titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, indent: L.indent > 0 };
   if (f.fmt.value === 'pdf') return printBook(book, opt);
@@ -233,10 +236,10 @@ export async function downloadBackup() {
 
 // ---------- 자료실 ----------
 const NOTE_TYPES = {
-  character: { name: '인물', fields: ['나이·성별', '역할', '외모', '성격', '말투', '목표·동기', '비밀·약점', '관계'] },
-  place: { name: '장소', fields: ['위치', '분위기·감각', '처음 등장', '의미'] },
+  character: { name: '인물', fields: ['다른 이름', '나이·성별', '역할', '외모', '성격', '말투', '목표·동기', '비밀·약점', '관계'] },
+  place: { name: '장소', fields: ['다른 이름', '위치', '분위기·감각', '처음 등장', '의미'] },
   world: { name: '설정·세계관', fields: ['분류', '규칙', '역사'] },
-  item: { name: '사물·용어', fields: ['설명', '등장'] },
+  item: { name: '사물·용어', fields: ['다른 이름', '설명', '등장'] },
   plot: { name: '플롯·복선', fields: ['심은 곳', '거둘 곳', '상태'] },
   memo: { name: '메모', fields: [] },
 };
@@ -246,15 +249,17 @@ export async function renderNotes() {
   notesCache = await S.notesOf(app.project.id);
   const f = $('#noteFilter').value, q = $('#noteSearch').value.trim();
   const list = notesCache
-    .filter((n) => f === 'all' || n.type === f)
-    .filter((n) => !q || (n.name + ' ' + n.body + ' ' + Object.values(n.fields || {}).join(' ')).includes(q))
-    .sort((a, b) => (a.type + a.name).localeCompare(b.type + b.name, 'ko'));
-  $('#noteList').innerHTML = list.map((n) => `<li data-note="${n.id}"><div><span class="k">${NOTE_TYPES[n.type]?.name || ''}</span><b>${h(n.name || '(이름 없음)')}</b></div>
-    <div class="d">${h((n.fields?.['역할'] || n.body || '').slice(0, 60))}</div></li>`).join('') || '<p class="hint">인물, 장소, 설정, 복선을 정리해 두세요.</p>';
+    .filter((n) => f === 'all' || n.type === f || (f === 'anno' && isAnno(n)))
+    .filter((n) => !q || [n.name, n.body, n.quote, n.fix, n.source, n.author, ...Object.values(n.fields || {})].filter(Boolean).join(' ').includes(q))
+    .sort((a, b) => (isAnno(a) - isAnno(b)) || (isAnno(a) && isAnno(b) ? (a.time || 0) - (b.time || 0) : (a.type + a.name).localeCompare(b.type + b.name, 'ko')));
+  const curHtml = app.editor.getHTML();
+  $('#noteList').innerHTML = list.map((n) => isAnno(n) ? annoListItem(n, curHtml) : `<li data-note="${n.id}"><div><span class="k">${NOTE_TYPES[n.type]?.name || ''}</span><b>${h(n.name || '(이름 없음)')}</b></div>
+    <div class="d">${h((n.fields?.['역할'] || n.body || '').slice(0, 60))}</div></li>`).join('') || '<p class="hint">인물, 장소, 설정, 복선을 정리해 두세요. 본문 글자를 고르고 마우스 오른쪽을 누르면 색인·교정 제안·인용·의도 주석도 달 수 있어요.</p>';
 }
 
 export async function editNote(id, preset = {}) {
-  const filter = $('#noteFilter').value;
+  if (id && isAnno(notesCache.find((x) => x.id === id))) { await editAnno(id); return renderNotes(); }
+  const filter = NOTE_TYPES[$('#noteFilter').value] ? $('#noteFilter').value : 'all';
   const n = id ? notesCache.find((x) => x.id === id) : { id: S.uid(), projectId: app.project.id, type: preset.body ? 'memo' : filter === 'all' ? 'character' : filter, name: preset.body ? `${app.chapters.get(app.cur)?.title || ''} 메모` : '', fields: {}, body: preset.body || '' };
   const fieldsHtml = (type) => NOTE_TYPES[type].fields.map((k) => `<label class="field"><span>${k}</span><input data-f="${k}" value="${h(n.fields?.[k] || '')}"></label>`).join('');
   // 이 자료가 등장하는 장

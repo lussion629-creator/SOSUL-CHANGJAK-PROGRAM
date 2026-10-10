@@ -141,6 +141,7 @@ export async function writeHwpx(book, opt = {}) {
   const extraChars = [];
   const charId = (f = {}, size = baseSize) => {
     if (f.size && size === baseSize) size = Math.round(f.size * 100); // 글자마다 정한 크기 (pt)
+    if (f.spacingPt != null) f = { ...f, spacing: Math.round(f.spacingPt / (size / 100) * 100) }; // pt 자간 → 한글의 % 자간
     const key = JSON.stringify([!!f.bold, !!f.italic, !!f.underline, !!f.strike, f.color || '', size, f.font || '', f.spacing ?? '']);
     if (charMap.has(key)) return charMap.get(key);
     const id = charCount++;
@@ -171,17 +172,18 @@ export async function writeHwpx(book, opt = {}) {
   // pf: 문단마다 '단락' 창에서 정한 값 {indL, indR, first, line, before, after, brk}
   const paraId = (align = 'JUSTIFY', indent = 0, left = 0, before = 0, pf = null) => {
     const em = (v) => Math.round(v * baseSize);
-    let right = 0, after = null, line = lineSp, brk = null;
+    let right = 0, after = null, line = lineSp, brk = null, lineType = 'PERCENT';
     if (pf) {
       if (pf.indL != null) left += em(pf.indL);
       if (pf.indR != null) right = em(pf.indR);
       if (pf.first != null) indent = em(pf.first); // 음수면 내어쓰기
-      if (pf.line != null) line = Math.round(pf.line);
+      if (pf.lineType) { lineType = pf.lineType === 'min' ? 'AT_LEAST' : 'FIXED'; line = Math.round(pf.linePt * 100); } // 고정 값·최소는 HWPUNIT (1pt = 100)
+      else if (pf.line != null) line = Math.round(pf.line);
       if (pf.before != null) before = Math.round(pf.before * 100);
       if (pf.after != null) after = Math.round(pf.after * 100);
       if (pf.brk) brk = pf.brk === 'char' ? 'BREAK_WORD' : 'KEEP_WORD';
     }
-    const key = [align, indent, left, before, right, after, line, brk].join();
+    const key = [align, indent, left, before, right, after, line, lineType, brk].join();
     if (paraMap.has(key)) return paraMap.get(key);
     const id = paraCount++;
     if (after == null) after = L?.paraAfter ? Math.round(L.paraAfter * 100) : 0;
@@ -194,9 +196,8 @@ export async function writeHwpx(book, opt = {}) {
       .replace('<hc:next value="0"', `<hc:next value="${after * k}"`);
     let x = paraTpl.replace('id="0"', `id="${id}"`)
       .replace('horizontal="JUSTIFY"', `horizontal="${align}"`)
-      .replace(/<hp:case[\s\S]*?<\/hp:case>/, margins(1))
-      .replace(/<hp:default>[\s\S]*?<\/hp:default>/, margins(2))
-      .replaceAll('type="PERCENT" value="160"', `type="PERCENT" value="${line}"`);
+      .replace(/<hp:case[\s\S]*?<\/hp:case>/, (m) => margins(1)(m).replaceAll('type="PERCENT" value="160"', `type="${lineType}" value="${line}"`))
+      .replace(/<hp:default>[\s\S]*?<\/hp:default>/, (m) => margins(2)(m).replaceAll('type="PERCENT" value="160"', `type="${lineType}" value="${lineType === 'PERCENT' ? line : line * 2}"`));
     if (brk) x = x.replace(/breakNonLatinWord="\w+"/, `breakNonLatinWord="${brk}"`);
     extraParas.push(x);
     paraMap.set(key, id);

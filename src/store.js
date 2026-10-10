@@ -272,6 +272,15 @@ export async function importBundle(b, { keepIds = true } = {}) {
     if (!map.has(old)) map.set(old, uid());
     return map.get(old);
   };
+  // 자료(주석) 아이디가 바뀌면 원고 HTML의 data-anno도 함께 바꾼다
+  for (const n of b.notes || []) nid(n.id);
+  const reAnno = (html) => {
+    if (!html || !html.includes('data-anno=')) return html;
+    let out = html;
+    for (const [o, nw] of map) if (o !== nw && out.includes(`data-anno="${o}"`)) out = out.split(`data-anno="${o}"`).join(`data-anno="${nw}"`);
+    return out;
+  };
+  b = { ...b, chapters: b.chapters.map((c) => ({ ...c, html: reAnno(c.html) })), snapshots: b.snapshots.map((s) => ({ ...s, html: reAnno(s.html) })) };
   const project = { ...b.project, id: nid(b.project.id) };
   // 쪽 설정 값은 화면·인쇄용 CSS에 들어가므로 숫자·참거짓·안전한 글자만 남긴다
   if (project.layout && typeof project.layout === 'object') {
