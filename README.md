@@ -2,7 +2,7 @@
 
 소설가를 위한 웹 워드프로세서입니다. PC와 휴대폰 브라우저에서 열고, ‘홈 화면에 추가’(설치)하면 앱처럼 씁니다.
 
-바로 쓰기: https://lussion629-creator.github.io/sosul-changjak-program/
+바로 쓰기: https://lussion629-creator.github.io/SOSUL-CHANGJAK-PROGRAM/
 
 ## 기능
 - Word와 비슷한 서식: 굵게·기울임·밑줄·취소선, 글꼴·크기·색, 형광펜, 정렬, 목록, 제목 1~3, 인용, 장면 전환(* * *)
