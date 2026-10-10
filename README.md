@@ -43,3 +43,4 @@ main 브랜치에 올리면 `.github/workflows/pages.yml`이 빌드해서 GitHub
 ## 라이선스 메모
 - HWPX 저장 틀: python-hwpx의 Skeleton.hwpx (Apache-2.0, `src/hwpx-template/LICENSE-python-hwpx.txt`)
 - Pretendard 글꼴: SIL OFL (`public/fonts/PRETENDARD-LICENSE.txt`)
+- KoPub바탕체 Light: 문화체육관광부·한국출판인회의 저작, KoPub 서체 라이선스 (`public/fonts/KOPUB-LICENSE.md`). 무료 사용·재배포 가능, 판매 금지

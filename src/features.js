@@ -389,6 +389,7 @@ export async function showSettings() {
     ["'Gowun Batang', 'Nanum Myeongjo', Batang, serif", '고운바탕'],
     ["'Nanum Myeongjo', Batang, serif", '나눔명조'],
     ["'Noto Serif KR', Batang, serif", '본명조 (Noto Serif KR)'],
+    ["'KoPub Batang Light', Batang, serif", 'KoPub바탕 Light'],
     ["Batang, 'AppleMyungjo', serif", '바탕 (설치된 글꼴)'],
     ["'Nanum Gothic', sans-serif", '나눔고딕'],
     ['Pretendard, sans-serif', '프리텐다드'],

@@ -1,4 +1,6 @@
 @font-face { font-family: Pretendard; src: url('/fonts/pretendard.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+/* KoPub바탕체 Light: 문화체육관광부·한국출판인회의, KoPub 서체 라이선스(public/fonts/KOPUB-LICENSE.md). 설치돼 있으면 그 글꼴을 쓴다 */
+@font-face { font-family: 'KoPub Batang Light'; src: local('KoPub Batang Light'), local('KoPub바탕체 Light'), local('KoPubBatang-Light'), url('/fonts/kopub-batang-light.woff') format('woff'); font-weight: 400; font-display: swap; }
 
 :root {
   --bg: #f6f3ee; --bg2: #efebe4; --panel: #fbfaf7; --paper: #ffffff; --ink: #24211d; --ink2: #6b655c; --ink3: #9a948a;
