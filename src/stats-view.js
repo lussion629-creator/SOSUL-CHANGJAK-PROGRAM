@@ -9,7 +9,7 @@ const SERIES = [
   { key: 'rev', name: '고친 양', cls: 's-rev' },
   { key: 'del', name: '지운 양', cls: 's-del' },
 ];
-const view = { range: 30, mode: 'group', scope: 'project', on: { add: true, rev: true, del: true } };
+const view = { range: 30, mode: 'group', scope: 'project', skipEmpty: false, on: { add: true, rev: true, del: true } };
 try { Object.assign(view, JSON.parse(localStorage.getItem('nw-statview') || '{}')); } catch { /* 무시 */ }
 
 // 날짜별 합계 (예전 기록에는 쓴 양 대신 늘어난 글자 수를 쓴다)
@@ -44,6 +44,7 @@ function dayList(by, range) {
 function chartSvg(days, width = 760) {
   const keys = SERIES.filter((s) => view.on[s.key]);
   if (!keys.length) return '<p class="hint" style="margin:0">위에서 볼 항목을 하나 이상 고르세요.</p>';
+  if (!days.length) return '<p class="hint" style="margin:0">이 기간에는 쓴 날이 없습니다.</p>';
   const W = Math.max(300, Math.round(width)), H = W < 500 ? 200 : 240, L = 40, R = 8, T = 12, B = 26;
   const iw = W - L - R, ih = H - T - B;
   const val = (d) => (view.mode === 'group' ? Math.max(...keys.map((s) => d[s.key])) : keys.reduce((a, s) => a + d[s.key], 0));
@@ -66,13 +67,14 @@ function chartSvg(days, width = 760) {
     if ((i % every === 0 && lastI - i >= every * 0.6) || i === lastI) {
       const [, m, dd] = d.date.split('-');
       // 양 끝 날짜는 그래프 밖으로 잘리지 않게 안쪽으로 붙인다
-      const [x, anchor] = i === lastI ? [L + slot * (i + 1), 'end'] : i === 0 ? [L, 'start'] : [L + slot * i + slot / 2, 'middle'];
-      g += `<text x="${x}" y="${H - 8}" text-anchor="${anchor}" class="tick">${+m}/${+dd}</text>`;
+      const x = Math.min(W - R - 18, Math.max(L + 18, L + slot * i + slot / 2));
+      g += `<text x="${x}" y="${H - 8}" text-anchor="middle" class="tick">${+m}/${+dd}</text>`;
     }
   });
-  const bw = slot - gap;
+  // 날이 적을 때 막대가 너무 넓어지지 않게
+  const bw = Math.min(slot - gap, view.mode === 'group' ? 20 * keys.length : 36);
   days.forEach((d, i) => {
-    const x0 = L + slot * i + gap / 2;
+    const x0 = L + slot * i + (slot - bw) / 2;
     const tip = `${d.date} · ` + SERIES.map((s) => `${s.name} ${fmt(d[s.key])}`).join(' · ') + ` · 합계 ${fmt(d.add + d.rev + d.del)}`;
     if (view.mode === 'group') {
       const w = bw / keys.length;
@@ -127,7 +129,7 @@ function body(days, width) {
       ${view.mode === 'sum'
         ? `<div class="legend"><span><i class="sw s-sum"></i>${legend.map((s) => s.name).join(' + ')} 합산</span></div>`
         : `<div class="legend">${legend.map((s) => `<span><i class="sw ${s.cls}"></i>${s.name}</span>`).join('')}</div>`}
-      ${chartSvg(days, width)}
+      ${chartSvg(view.skipEmpty ? days.filter((d) => SERIES.some((s) => view.on[s.key] && d[s.key])) : days, width)}
     </div>
     <details><summary>날짜별 표로 보기</summary>
       <div class="tablewrap"><table class="daytable"><thead><tr><th>날짜</th><th>쓴 양</th><th>고친 양</th><th>지운 양</th><th>합계</th></tr></thead>
@@ -144,6 +146,7 @@ export async function showStats() {
       <div class="seg" data-g="range">${[[7, '7일'], [30, '30일'], [90, '90일'], ['all', '전체']].map(([v, l]) => `<button type="button" data-v="${v}" class="${String(view.range) === String(v) ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="seg" data-g="mode">${[['group', '따로'], ['stack', '쌓아서'], ['sum', '합산']].map(([v, l]) => `<button type="button" data-v="${v}" class="${view.mode === v ? 'on' : ''}">${l}</button>`).join('')}</div>
       <div class="seg" data-g="scope">${[['project', '이 작품'], ['all', '모든 작품']].map(([v, l]) => `<button type="button" data-v="${v}" class="${view.scope === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <label class="check"><input type="checkbox" data-skip ${view.skipEmpty ? 'checked' : ''}>안 쓴 날 빼기</label>
       <div class="checks">${SERIES.map((s) => `<label class="check"><input type="checkbox" data-k="${s.key}" ${view.on[s.key] ? 'checked' : ''}><i class="sw ${s.cls}"></i>${s.name}</label>`).join('')}</div>
     </div>`;
   const render = async (f) => {
@@ -172,6 +175,7 @@ export async function showStats() {
         save(); render(f);
       });
       f.addEventListener('change', (e) => {
+        if ('skip' in e.target.dataset) { view.skipEmpty = e.target.checked; save(); render(f); return; }
         const k = e.target.dataset.k;
         if (!k) return;
         view.on[k] = e.target.checked;
