@@ -3,12 +3,15 @@ import * as S from './store.js';
 import * as G from './gdrive.js';
 import {
   app, loadSettings, initEditor, openProject, openChapter, saveNow, addChapter, chapterMenu, bindBinderDrag,
-  renderHistory, snapshotMenu, manualSnapshot, toggleTheme, toggleSidebar, isTabOpen, refreshSyncPill, scheduleSync, syncNow, renderBinder,
+  renderHistory, summarizePeriod, snapshotMenu, manualSnapshot, toggleTheme, toggleSidebar, isTabOpen, refreshSyncPill, scheduleSync, syncNow, flushSync, renderBinder,
 } from './app.js';
 import { runCommand, setSearch } from './editor.js';
 import { openRevision, closeRevision, isRevisionOpen, bindRevision, revisionOnChapterChange } from './revision.js';
 import * as F from './features.js';
 import { showStats } from './stats-view.js';
+import { loadTemplates } from './layout.js';
+import { bindPageView, togglePageView, applyPageView, setZoom } from './pageview.js';
+import { showPageSetup } from './pagesetup.js';
 import { $, $$, toast } from './ui.js';
 
 const ACTIONS = {
@@ -17,11 +20,15 @@ const ACTIONS = {
   revision: () => (isRevisionOpen() ? closeRevision() : openRevision()),
   focus: () => F.toggleFocus(), cork: () => { closeRevision(); F.toggleCork(); }, theme: toggleTheme, settings: F.showSettings,
   find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, sprint: F.showSprint, snapshot: manualSnapshot,
-  drive: F.showDrive, addChapter: () => addChapter(), addNote: () => F.editNote(null),
+  pageView: () => togglePageView(), pageSetup: showPageSetup,
+  drive: F.showDrive, driveImport: F.driveImport,
+  renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
+  addChapter: () => addChapter(), addNote: () => F.editNote(null),
 };
 
 async function boot() {
   loadSettings();
+  await loadTemplates();
   initEditor();
   app.openRevision = openRevision;
   G.configure(app.settings.driveClientId);
@@ -44,8 +51,9 @@ async function boot() {
     }
   }
   await openProject(pid);
-  app.hooks.afterOpen.push(() => { if (isTabOpen('notes')) F.renderNotes(); revisionOnChapterChange(); });
+  app.hooks.afterOpen.push(() => { if (isTabOpen('notes')) F.renderNotes(); revisionOnChapterChange(); applyPageView(); });
   bind();
+  bindPageView();
   bindRevision();
   F.bindCork();
   refreshSyncPill();
@@ -54,7 +62,7 @@ async function boot() {
   // 다른 곳에서 넘겨받은 파일 열기: 데스크톱 앱(연결 프로그램), 설치한 웹앱(파일 연결)
   window.desktop?.onOpenFile(({ name, data }) => F.openFromFile(new File([data], name)));
   window.launchQueue?.setConsumer(async (p) => { for (const h of p.files || []) F.openFromFile(await h.getFile()); });
-  window.__saveBeforeClose = () => saveNow();
+  window.__saveBeforeClose = async () => { await saveNow(); await flushSync(); };
 }
 
 function bind() {
@@ -66,6 +74,7 @@ function bind() {
       const m = $('#menu-' + mb.dataset.menu);
       const was = m.classList.contains('open');
       $$('.menu.open, .menu-btn.open').forEach((x) => x.classList.remove('open'));
+      if (!was && mb.dataset.menu === 'projects') F.fillProjectMenu(m);
       if (!was) { m.classList.add('open'); mb.classList.add('open'); }
       return;
     }
@@ -73,7 +82,8 @@ function bind() {
     const a = e.target.closest('[data-act]');
     if (a && !a.closest('dialog')) {
       $$('.menu.open, .menu-btn.open').forEach((x) => x.classList.remove('open'));
-      ACTIONS[a.dataset.act]?.();
+      if (a.dataset.act === 'switchTo') F.switchProject(a.dataset.id);
+      else ACTIONS[a.dataset.act]?.();
     }
   });
 
@@ -128,11 +138,20 @@ function bind() {
     if (b.dataset.tab === 'history') renderHistory();
     if (b.dataset.tab === 'notes') F.renderNotes();
   }));
+  ['#hfYear', '#hfMonth', '#hfDay'].forEach((sel, i) => $(sel).addEventListener('change', () => {
+    // 위 단계를 바꾸면 아래 단계는 처음부터
+    if (i < 1) $('#hfMonth').value = '';
+    if (i < 2) $('#hfDay').value = '';
+    renderHistory();
+  }));
+  $('#histSummary').addEventListener('click', summarizePeriod);
   $('#historyList').addEventListener('click', (e) => { const x = e.target.closest('[data-snap]'); if (x) snapshotMenu(x.dataset.snap); });
   $('#noteList').addEventListener('click', (e) => { const x = e.target.closest('[data-note]'); if (x) F.editNote(x.dataset.note); });
   $('#noteFilter').addEventListener('change', F.renderNotes);
   $('#noteSearch').addEventListener('input', F.renderNotes);
   $('#btnSidebar').addEventListener('click', () => toggleSidebar());
+  $('#pvZoomSel').value = app.settings.pvZoom || 'fit';
+  $('#pvZoomSel').addEventListener('change', (e) => setZoom(e.target.value));
 
   // 찾기
   $('#findInput').addEventListener('input', () => F.runFind(0));
@@ -151,6 +170,7 @@ function bind() {
     else if (mod && e.key.toLowerCase() === 'f' && !e.shiftKey) { e.preventDefault(); F.openFind(); }
     else if (mod && e.key.toLowerCase() === 'h') { e.preventDefault(); F.openFind(); $('#replaceInput').focus(); }
     else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); F.toggleFocus(); }
+    else if (e.key === 'F7') { e.preventDefault(); showPageSetup(); }
     else if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); ACTIONS.print(); }
     else if (e.key === 'Escape') {
       if ($('#dlg').open) return;
@@ -164,7 +184,7 @@ function bind() {
   document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('focus')) F.toggleFocus(false); });
 
   // 창을 닫거나 다른 앱으로 갈 때 바로 저장
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { saveNow(); scheduleSync(1000); } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow().then(flushSync); });
   window.addEventListener('pagehide', () => saveNow());
   window.addEventListener('beforeunload', (e) => { if (app.dirty) { saveNow(); e.preventDefault(); } });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {});

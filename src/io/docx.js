@@ -1,7 +1,7 @@
 // Word(.docx) 열기·저장
 import mammoth from 'mammoth/mammoth.browser.js';
 import {
-  Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, PageBreak, Footer, PageNumber, LineRuleType,
+  Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, PageBreak, Footer, PageNumber, LineRuleType, PageOrientation,
 } from 'docx';
 import { htmlToBlocks } from './model.js';
 
@@ -40,9 +40,15 @@ function runsToDocx(runs = [], base = {}) {
  * @param {{font?:string, size?:number, indent?:boolean, lineHeight?:number, titlePage?:boolean, chapterTitles?:boolean}} opt
  */
 export async function writeDocx(book, opt = {}) {
-  const font = opt.font || '바탕';
-  const size = Math.round((opt.size || 10) * 2);
-  const line = Math.round(240 * (opt.lineHeight || 1.6));
+  const L = opt.layout; // 쪽 설정
+  const font = L?.fontName || opt.font || '바탕';
+  const size = Math.round((L?.size || opt.size || 10) * 2);
+  // 한글처럼 줄 간격을 글자 크기의 몇 %로: 고정 줄 높이(1/20pt)로 넣는다
+  const spacing = L ? { line: Math.round(L.size * L.line / 100 * 20), lineRule: LineRuleType.EXACT, after: Math.round((L.paraAfter || 0) * 20) }
+    : { line: Math.round(240 * (opt.lineHeight || 1.6)), lineRule: LineRuleType.AUTO, after: opt.paraSpacing ? 120 : 0 };
+  const firstLine = L ? Math.round(L.indent * L.size * 20) : opt.indent ? size * 10 : 0;
+  const bodyAlign = L?.align === 'left' ? AlignmentType.LEFT : AlignmentType.JUSTIFIED;
+  const keepWord = !L || L.breakWord !== 'char'; // 한글 어절 단위 줄 나눔
   const children = [];
 
   if (opt.titlePage) {
@@ -65,10 +71,11 @@ export async function writeDocx(book, opt = {}) {
         continue;
       }
       children.push(new Paragraph({
-        alignment: ALIGN[b.align] || AlignmentType.JUSTIFIED,
-        indent: b.type === 'quote' ? { left: 720 } : (opt.indent && !b.align ? { firstLine: size * 10 } : undefined),
+        alignment: ALIGN[b.align] || bodyAlign,
+        indent: b.type === 'quote' ? { left: 720 } : (firstLine && !b.align ? { firstLine } : undefined),
         bullet: b.type === 'li' && !b.ordered ? { level: 0 } : undefined,
-        spacing: { line, lineRule: LineRuleType.AUTO, after: opt.paraSpacing ? 120 : 0 },
+        spacing,
+        wordWrap: keepWord,
         children: runsToDocx(b.runs),
       }));
     }
@@ -78,18 +85,45 @@ export async function writeDocx(book, opt = {}) {
     creator: book.author || '',
     title: book.title,
     styles: {
-      default: { document: { run: { font: { ascii: font, eastAsia: font, hAnsi: font }, size } } },
+      default: { document: { run: { font: { ascii: font, eastAsia: font, hAnsi: font }, size, characterSpacing: L?.spacing ? Math.round(L.size * L.spacing / 100 * 20) : undefined } } },
       paragraphStyles: [
         { id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { size: 32, bold: true, font: { eastAsia: font, ascii: font } }, paragraph: { spacing: { before: 240, after: 240 } } },
         { id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { size: 28, bold: true }, paragraph: { spacing: { before: 200, after: 200 } } },
         { id: 'Heading3', name: 'Heading 3', basedOn: 'Normal', next: 'Normal', quickFormat: true, run: { size: 24, bold: true }, paragraph: { spacing: { before: 160, after: 160 } } },
       ],
     },
+    evenAndOddHeaderAndFooters: L?.num === 'outside',
     sections: [{
-      properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1701, bottom: 1440, left: 1440, right: 1440 } } },
-      footers: { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ children: [PageNumber.CURRENT] })] })] }) },
+      properties: L ? {
+        page: {
+          size: { width: tw(Math.min(L.w, L.h)), height: tw(Math.max(L.w, L.h)), orientation: L.w > L.h ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
+          // 한글의 머리말·꼬리말 칸은 Word에서 본문 여백에 더하고, 머리말·꼬리말 위치는 바깥 여백으로 둔다
+          margin: { top: tw(L.mt + L.mh), bottom: tw(L.mb + L.mf), left: tw(L.ml), right: tw(L.mr), header: tw(L.mt), footer: tw(L.mb) },
+          pageNumbers: L.numStart > 1 ? { start: L.numStart } : undefined,
+        },
+      } : { page: { size: { width: 11906, height: 16838 }, margin: { top: 1701, bottom: 1440, left: 1440, right: 1440 } } },
+      footers: footersFor(L),
       children,
     }],
   });
-  return Packer.toBlob(doc);
+  const blob = await Packer.toBlob(doc);
+  if (!L?.mirror || L.ml === L.mr) return blob;
+  // 맞쪽 여백: Word 설정 파일에 mirrorMargins를 넣는다
+  const { default: JSZip } = await import('jszip');
+  const zip = await JSZip.loadAsync(blob);
+  const st = await zip.file('word/settings.xml').async('string');
+  // 스키마 순서: mirrorMargins는 displayBackgroundShape 등 뒤, evenAndOddHeaders 등 앞
+  const after = /<w:(alignBordersAndEdges|bordersDoNotSurroundHeader|bordersDoNotSurroundFooter|gutterAtTop|hideSpellingErrors|hideGrammaticalErrors|activeWritingStyle|proofState|formsDesign|attachedTemplate|linkStyles|stylePaneFormatFilter|stylePaneSortMethod|documentType|mailMerge|revisionView|trackRevisions|doNotTrackMoves|doNotTrackFormatting|documentProtection|autoFormatOverride|styleLockTheme|styleLockQFSet|defaultTabStop|autoHyphenation|consecutiveHyphenLimit|hyphenationZone|doNotHyphenateCaps|showEnvelope|summaryLength|clickAndTypeStyle|defaultTableStyle|evenAndOddHeaders|bookFoldRevPrinting|bookFoldPrinting|bookFoldPrintingSheets|drawingGridHorizontalSpacing|drawingGridVerticalSpacing|displayHorizontalDrawingGridEvery|displayVerticalDrawingGridEvery|doNotUseMarginsForDrawingGridOrigin|drawingGridHorizontalOrigin|drawingGridVerticalOrigin|doNotShadeFormData|noPunctuationKerning|characterSpacingControl|printTwoOnOne|strictFirstAndLastChars|noLineBreaksAfter|noLineBreaksBefore|savePreviewPicture|doNotValidateAgainstSchema|saveInvalidXml|ignoreMixedContent|alwaysShowPlaceholderText|doNotDemarcateInvalidXml|saveXmlDataOnly|useXSLTWhenSaving|saveThroughXslt|showXMLTags|alwaysMergeEmptyNamespace|updateFields|hdrShapeDefaults|footnotePr|endnotePr|compat|docVars|rsids|mathPr|attachedSchema|themeFontLang|clrSchemeMapping|doNotIncludeSubdocsInStats|doNotAutoCompressPictures|forceUpgrade|captions|readModeInkLockDown|smartTagType|schemaLibrary|shapeDefaults|doNotEmbedSmartTags|decimalSymbol|listSeparator)[\s/>]/;
+  const m = st.match(after);
+  zip.file('word/settings.xml', m ? st.slice(0, m.index) + '<w:mirrorMargins/>' + st.slice(m.index) : st.replace('</w:settings>', '<w:mirrorMargins/></w:settings>'));
+  return zip.generateAsync({ type: 'blob', mimeType: blob.type });
+}
+
+const tw = (mm) => Math.round(mm * 1440 / 25.4);
+function footersFor(L) {
+  const num = (align) => new Footer({ children: [new Paragraph({ alignment: align, children: [new TextRun({ children: [PageNumber.CURRENT] })] })] });
+  if (!L) return { default: num(AlignmentType.CENTER) };
+  if (L.num === 'none') return {};
+  if (L.num === 'outside') return { default: num(AlignmentType.RIGHT), even: num(AlignmentType.LEFT) };
+  return { default: num({ center: AlignmentType.CENTER, right: AlignmentType.RIGHT, left: AlignmentType.LEFT }[L.num]) };
 }

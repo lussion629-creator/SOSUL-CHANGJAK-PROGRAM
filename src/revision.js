@@ -2,6 +2,7 @@
 import * as S from './store.js';
 import { app, saveNow, htmlParagraphs, restoreSnapshot } from './app.js';
 import { compare, esc } from './diff.js';
+import { layoutOf } from './layout.js';
 import { paginate } from './paginate.js';
 import { setDiffMarks, docParagraphs } from './editor.js';
 import { countHtml, fmt } from './stats.js';
@@ -66,7 +67,7 @@ function render() {
   const lst = L.scrollTop;
   const leftHtml = rv.marks ? rowsHtml(res.rows, 'left') : rv.base.html;
   L.classList.toggle('nomarks', !rv.marks);
-  if (rv.left === 'page') { L.innerHTML = '<div></div>'; paginate(leftHtml, L.firstChild, { header: app.chapters.get(app.cur).title }); }
+  if (rv.left === 'page') { L.innerHTML = '<div></div>'; paginate(leftHtml, L.firstChild, { header: app.chapters.get(app.cur).title, layout: layoutOf() }); }
   else L.innerHTML = `<div class="flow prose">${leftHtml}</div>`;
   L.scrollTop = lst;
 
@@ -88,7 +89,7 @@ function renderRight(newParas = docParagraphs(app.editor.state.doc)) {
     const st = R.scrollTop;
     R.innerHTML = '<div></div>';
     R.classList.toggle('nomarks', !rv.marks);
-    paginate(rv.marks ? rowsHtml(rv.result.rows, 'right') : app.editor.getHTML(), R.firstChild, { header: app.chapters.get(app.cur).title });
+    paginate(rv.marks ? rowsHtml(rv.result.rows, 'right') : app.editor.getHTML(), R.firstChild, { header: app.chapters.get(app.cur).title, layout: layoutOf() });
     R.scrollTop = st;
   }
 }

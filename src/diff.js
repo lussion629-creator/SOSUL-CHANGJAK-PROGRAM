@@ -144,3 +144,73 @@ function keepRatio(a, b) {
   for (const p of parts) if (!p.added && !p.removed) same += p.value.join('').length;
   return a.length ? same / a.length : 0;
 }
+
+// ---------- 바뀐 내용 요약 ----------
+const clip = (s, n = 40) => { s = s.replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
+const tail = (s, n = 12) => { s = s.replace(/\s+/g, ' '); return s.length > n ? '…' + s.slice(-n) : s; };
+const head = (s, n = 12) => { s = s.replace(/\s+/g, ' '); return s.length > n ? s.slice(0, n) + '…' : s; };
+
+// 고친 문단 하나에서 바뀐 자리들: [{before, del, add, after}]
+function edits(a, b, max = 3) {
+  const ps = diffArrays(tokenize(a), tokenize(b));
+  const out = [];
+  let same = '';
+  for (let i = 0; i < ps.length; i++) {
+    const p = ps[i];
+    if (!p.added && !p.removed) { same = p.value.join(''); if (out.length && out[out.length - 1].after == null) out[out.length - 1].after = head(same); continue; }
+    let del = '', add = '';
+    while (i < ps.length && (ps[i].added || ps[i].removed)) {
+      if (ps[i].added) add += ps[i].value.join(''); else del += ps[i].value.join('');
+      i++;
+    }
+    i--;
+    if (!del.trim() && !add.trim()) continue;
+    out.push({ before: tail(same), del: clip(del, 30), add: clip(add, 30), after: null });
+  }
+  for (const e of out) if (e.after == null) e.after = '';
+  return { list: out.slice(0, max), more: Math.max(0, out.length - max) };
+}
+
+/**
+ * 두 버전의 문단 목록을 비교해 "어디가 어떻게 바뀌었는지" 정리한다.
+ * places: {kind:'changed'|'added'|'removed', at(새 원고 기준 문단 번호, 1부터), pos(0~100 %), add, del, edits}
+ */
+export function summarize(oldParas, newParas, max = 40) {
+  const { rows, stats } = compare(oldParas, newParas);
+  const places = [];
+  const N = Math.max(1, newParas.length);
+  for (const r of rows) {
+    if (r.type === 'same') continue;
+    const at = r.ri + 1;
+    const item = { kind: r.type, at, pos: Math.min(100, Math.round((r.ri / N) * 100)) };
+    if (r.type === 'added') { if (!newParas[r.ri].trim()) continue; item.add = clip(newParas[r.ri], 60); }
+    else if (r.type === 'removed') { if (!oldParas[r.li].trim()) continue; item.del = clip(oldParas[r.li], 60); }
+    else { const e = edits(oldParas[r.li], newParas[r.ri]); if (!e.list.length) continue; item.edits = e.list; item.more = e.more; }
+    // 붙어 있는 추가·삭제 문단은 하나로 묶는다
+    const last = places[places.length - 1];
+    if (last && last.kind === item.kind && item.kind !== 'changed' && item.at - (last.at + (last.n || 1) - 1) <= 1) {
+      last.n = (last.n || 1) + 1;
+      continue;
+    }
+    places.push(item);
+  }
+  return { stats, total: places.length, places: places.slice(0, max) };
+}
+
+// 원고 어디쯤인지 말로
+export const where = (pos) => (pos < 20 ? '앞부분' : pos < 40 ? '앞쪽' : pos < 60 ? '가운데' : pos < 80 ? '뒤쪽' : '끝부분');
+
+// 요약 한 줄 (버전 목록용)
+export function summaryLine(sm) {
+  if (!sm || !sm.total) return '바뀐 곳 없음';
+  const c = sm.places.filter((p) => p.kind === 'changed').length;
+  const a = sm.places.filter((p) => p.kind === 'added').reduce((n, p) => n + (p.n || 1), 0);
+  const d = sm.places.filter((p) => p.kind === 'removed').reduce((n, p) => n + (p.n || 1), 0);
+  const bits = [c && `${c}곳 고침`, a && `${a}문단 추가`, d && `${d}문단 삭제`].filter(Boolean).join(' · ');
+  const p = sm.places[0];
+  let ex = '';
+  if (p.kind === 'changed') { const e = p.edits[0]; ex = e.del && e.add ? `‘${e.del}’→‘${e.add}’` : e.add ? `+‘${e.add}’` : `−‘${e.del}’`; }
+  else if (p.kind === 'added') ex = `+‘${clip(p.add, 18)}’`;
+  else ex = `−‘${clip(p.del, 18)}’`;
+  return `${bits} · ${p.at}문단 ${ex}`;
+}

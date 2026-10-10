@@ -7,6 +7,7 @@ import { TextStyle, Color, FontFamily, FontSize } from '@tiptap/extension-text-s
 import { Placeholder, Focus } from '@tiptap/extensions';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { PageBreaks } from './pageview.js';
 
 // ---------- 찾기 강조 ----------
 const searchKey = new PluginKey('search');
@@ -173,6 +174,7 @@ export function createEditor(el, { onUpdate, onSelection, smartQuotes, typewrite
       Focus.configure({ className: 'has-focus', mode: 'shallowest' }),
       Search,
       DiffMarks,
+      PageBreaks,
       SmartQuotes.configure({ enabled: smartQuotes }),
       Typewriter.configure({ enabled: typewriter }),
     ],

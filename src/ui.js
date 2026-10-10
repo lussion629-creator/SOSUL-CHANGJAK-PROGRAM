@@ -35,6 +35,13 @@ export function dialog({ title, body, buttons = [{ label: '닫기', value: 'clos
     const onCancel = () => { dlg.removeEventListener('cancel', onCancel); resolve({ value: 'close', form }); };
     dlg.addEventListener('cancel', onCancel);
     form.addEventListener('submit', () => dlg.removeEventListener('cancel', onCancel));
+    // 입력 칸에서 Enter는 '확인'(주 단추)으로 (기본 동작이면 맨 앞의 ✕가 눌린다)
+    form.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT' || ['checkbox', 'radio', 'file', 'button'].includes(e.target.type)) return;
+      const p = form.querySelector('.dlg-foot button.primary');
+      e.preventDefault();
+      if (p) form.requestSubmit(p);
+    });
     dlg.returnValue = '';
     dlg.showModal();
     onOpen?.(form, dlg);

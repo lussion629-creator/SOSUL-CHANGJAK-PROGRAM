@@ -9,6 +9,8 @@ import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
 import { setSearch, gotoMatch, findMatches } from './editor.js';
 import { $, $$, h, toast, dialog, confirmDlg, promptDlg, ago, fullTime } from './ui.js';
+import { layoutOf, fontName, textCss, readHwpxLayout } from './layout.js';
+import { showPageSetup, layoutSummary } from './pagesetup.js';
 
 // ---------- 파일 선택 ----------
 function pickFile(accept = OPEN_ACCEPT) {
@@ -19,6 +21,31 @@ function pickFile(accept = OPEN_ACCEPT) {
     inp.onchange = () => res(inp.files[0] || null);
     inp.click();
   });
+}
+
+// ---------- 작품 바꾸기 (제목 옆 메뉴) ----------
+export async function fillProjectMenu(m) {
+  const list = (await S.listProjects()).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  const rows = await Promise.all(list.slice(0, 12).map(async (p) => {
+    const chs = await S.chaptersOf(p.id);
+    const n = chs.reduce((a, c) => a + countHtml(c.html).withSpace, 0);
+    const cur = p.id === app.project?.id;
+    return `<button data-act="switchTo" data-id="${p.id}" class="${cur ? 'cur' : ''}" ${cur ? 'aria-current="true"' : ''}>
+      <span class="pm-t">${h(p.title)}</span><small>${cur ? '쓰는 중' : `${fmt(n)}자 · ${ago(p.updated)}`}</small></button>`;
+  }));
+  m.innerHTML = `<div class="pm-head">작품·글 바꾸기</div>${rows.join('')}
+    ${list.length > 12 ? `<button data-act="home"><span>다른 작품 ${list.length - 12}개 더 보기…</span></button>` : ''}
+    <hr><button data-act="newProject"><span>새 작품 만들기…</span><small>제목 정하기</small></button>
+    <button data-act="renameProject"><span>지금 작품 제목 바꾸기</span></button>
+    <button data-act="driveImport"><span>구글 드라이브에서 불러오기…</span></button>
+    <button data-act="open"><span>파일 열기…</span><small>hwpx·docx·pdf…</small></button>
+    <button data-act="home"><span>작품 목록 관리…</span><small>삭제</small></button>`;
+}
+export async function switchProject(id) {
+  if (!id || id === app.project?.id) return;
+  await saveNow();
+  await openProject(id);
+  toast(`“${app.project.title}”(으)로 바꿨어요.`);
 }
 
 // ---------- 작품 목록 ----------
@@ -88,6 +115,13 @@ export async function openFromFile(given) {
       return;
     }
     const p = await S.createProject(r.title, r.chapters.length ? r.chapters : [{ title: '1장', html: '' }]);
+    // 한글 파일이면 그 쪽 설정(용지·여백·글자)도 가져온다. 줄은 어절 단위로 나눈다.
+    if (/\.hwpx$/i.test(f.name)) {
+      try {
+        p.layout = { ...(await readHwpxLayout(await f.arrayBuffer())), breakWord: 'word', templateId: '', templateName: `“${f.name}”의 쪽 설정` };
+        await S.putProject(p);
+      } catch { /* 쪽 설정을 못 읽으면 기본 템플릿 */ }
+    }
     await openProject(p.id);
     toast(`“${f.name}”을(를) 새 작품으로 열었어요. (${r.chapters.length}개 장)`);
   } catch (e) {
@@ -97,7 +131,7 @@ export async function openFromFile(given) {
 }
 
 export async function importChapter() {
-  const f = await pickFile(OPEN_ACCEPT.replace(',.novel.json,.json', ''));
+  const f = await pickFile(OPEN_ACCEPT.replace(',.novel.json,.json,.gz', ''));
   if (!f) return;
   try {
     const r = await openFile(f, { onProgress: (n, total) => toast(`PDF 읽는 중… ${n}/${total}쪽`, 60000) });
@@ -134,24 +168,22 @@ export async function showExport() {
         <option value="html">웹 페이지 (.html)</option>
       </select></label>
       <label class="field"><span>범위</span><select name="range"><option value="all">작품 전체 (${app.project.order.length}개 장)</option><option value="cur">지금 장만</option></select></label>
-      <div class="row2">
-        <label class="field"><span>글자 크기 (pt)</span><input name="size" type="number" min="8" max="20" step="0.5" value="10.5"></label>
-        <label class="field"><span>줄 간격 (배)</span><input name="line" type="number" min="1" max="3" step="0.1" value="1.6"></label>
-      </div>
+      <div class="ps-sum"><span>쪽 설정</span><b>${h(layoutSummary())}</b><button type="button" class="small" data-open-setup>바꾸기</button></div>
       <label class="check"><input type="checkbox" name="titlePage" checked> 표지 (제목·지은이)</label>
       <label class="check"><input type="checkbox" name="chapterTitles" checked> 장 제목 넣기 (장마다 새 쪽)</label>
-      <label class="check"><input type="checkbox" name="indent" ${app.settings.indent ? 'checked' : ''}> 문단 첫 줄 들여쓰기</label>
       <label class="field"><span>지은이 (표지에 표시)</span><input name="author" value="${h(app.settings.author)}" placeholder="필명"></label>
       ${drive ? '<label class="check"><input type="checkbox" name="toDrive"> 구글 드라이브에도 저장 (Word는 Google 문서로 변환)</label>' : '<p class="hint" style="margin:0">구글 드라이브에 연결하면 내보낸 파일을 드라이브에도 바로 넣을 수 있어요.</p>'}
       <p class="hint" style="margin:0">.doc는 Word와 한글이 그대로 여는 RTF 방식으로 저장됩니다. .hwp(옛 한글 형식)로 저장하는 기능은 공개된 방법이 없어 .hwpx로 저장합니다. 한글에서 .hwpx를 연 뒤 ‘다른 이름으로 저장’하면 .hwp로 바꿀 수 있어요.</p>`,
     buttons: [{ label: '취소', value: 'close' }, { label: '내보내기', value: 'ok', primary: true }],
+    onOpen: (f) => f.querySelector('[data-open-setup]').addEventListener('click', () => showPageSetup()),
   });
   if (r.value !== 'ok') return;
   const f = r.form;
   app.settings.author = f.author.value.trim();
   saveSettings();
   const book = bookOf(f.range.value);
-  const opt = { size: +f.size.value || 10.5, lineHeight: +f.line.value || 1.6, titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, indent: f.indent.checked };
+  const L = layoutOf();
+  const opt = { layout: { ...L, fontName: fontName(L.font) }, size: L.size, lineHeight: L.line / 100, titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, indent: L.indent > 0 };
   if (f.fmt.value === 'pdf') return printBook(book, opt);
   try {
     const out = await exportBook(f.fmt.value, book, opt);
@@ -163,17 +195,35 @@ export async function showExport() {
   } catch (e) { console.error(e); toast('내보내지 못했습니다: ' + e.message, 6000); }
 }
 
-export function printBook(book = bookOf('all'), opt = { titlePage: true, chapterTitles: true, size: 10.5, lineHeight: 1.7 }) {
+export function printBook(book = bookOf('all'), opt = { titlePage: true, chapterTitles: true }) {
+  const L = layoutOf();
+  const t = textCss(L);
   let area = $('#printArea');
   if (!area) { area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
-  area.innerHTML = (opt.titlePage ? `<section class="title-page"><h1 style="font-size:26pt">${h(book.title)}</h1><p style="font-size:13pt">${h(book.author || '')}</p></section>` : '') +
-    book.chapters.map((c) => `<section>${opt.chapterTitles ? `<h1 class="ch">${h(c.title)}</h1>` : ''}<div class="prose" style="font-size:${opt.size}pt;line-height:${opt.lineHeight}">${c.html}</div></section>`).join('');
+  // 쪽 설정대로: 용지·여백·쪽 번호(@page), 글자·문단
+  const num = { outside: null, center: 'bottom-center', right: 'bottom-right', left: 'bottom-left' }[L.num];
+  const numRule = (box) => `@${box} { content: counter(page); font: ${L.size}pt ${t.fontFamily}; color: #444; vertical-align: top; }`;
+  const pageNum = L.num === 'none' ? '' : L.num === 'outside'
+    ? `@page :right { ${numRule('bottom-right')} } @page :left { ${numRule('bottom-left')} }`
+    : `@page { ${numRule(num)} }`;
+  const lr = L.mirror ? `@page :left { margin-left: ${L.mr}mm; margin-right: ${L.ml}mm; }` : '';
+  area.innerHTML = `<style>
+    @media print {
+      @page { size: ${L.w}mm ${L.h}mm; margin: ${L.mt + L.mh}mm ${L.mr}mm ${L.mb + L.mf}mm ${L.ml}mm; }
+      ${lr} ${pageNum}
+      ${L.numStart > 1 ? `#printArea { counter-reset: page ${L.numStart - 1}; }` : ''}
+      #printArea .prose { font-family: ${t.fontFamily}; font-size: ${L.size}pt; line-height: ${t.lineHeight}; letter-spacing: ${t.letterSpacing}; text-align: ${t.textAlign}; word-break: ${t.wordBreak}; }
+      #printArea .prose p { text-indent: ${L.indent}em; margin: 0 0 ${L.paraAfter}pt; }
+      #printArea h1.ch { font-family: ${t.fontFamily}; }
+    }</style>` +
+    (opt.titlePage ? `<section class="title-page"><h1 style="font-size:26pt">${h(book.title)}</h1><p style="font-size:13pt">${h(book.author || '')}</p></section>` : '') +
+    book.chapters.map((c) => `<section>${opt.chapterTitles ? `<h1 class="ch">${h(c.title)}</h1>` : ''}<div class="prose">${c.html}</div></section>`).join('');
   setTimeout(() => window.print(), 50);
 }
 
 export async function downloadBackup() {
   await saveNow();
-  const b = await S.exportBundle(app.project.id);
+  const b = S.packBundle(await S.exportBundle(app.project.id));
   download(new Blob([JSON.stringify(b)], { type: 'application/json' }), `${app.project.title}.novel.json`);
   toast('작품 전체(자료·버전 기록 포함)를 백업 파일로 받았어요.');
 }
@@ -444,7 +494,9 @@ export async function showDrive() {
       ${st.connected ? `<p class="pill ok" style="justify-self:start">연결됨 · ${app.project.syncedAt ? '마지막 동기화 ' + fullTime(Date.parse(app.project.syncedAt)) : '아직 동기화 전'}</p>` : ''}
       <details ${st.configured ? '' : 'open'}><summary>처음 한 번: 클라이언트 ID 만들기</summary>${steps}</details>
       <label class="field"><span>Google OAuth 클라이언트 ID</span><input name="cid" value="${h(app.settings.driveClientId)}" placeholder="1234567890-xxxx.apps.googleusercontent.com"></label>
-      <label class="check"><input type="checkbox" name="auto" ${app.settings.autoSync ? 'checked' : ''}> 저장할 때마다 자동으로 드라이브에 올리기 (15초 모아서)</label>`,
+      <div class="sync-row"><label class="check"><input type="checkbox" name="auto" ${app.settings.autoSync ? 'checked' : ''}> 자동으로 드라이브에 올리기</label>
+        <select name="every" aria-label="올리는 간격">${[1, 5, 10, 30].map((m) => `<option value="${m}" ${+app.settings.syncMinutes === m ? 'selected' : ''}>${m}분마다</option>`).join('')}</select></div>
+      <p class="hint" style="margin:0;line-height:1.6">작품마다 드라이브에 <b>파일 하나</b>만 두고 그 파일을 덮어씁니다. 새 파일이 쌓이지 않아요. 원고는 압축하고, 버전 기록은 앞 버전과 달라진 문단만 담아 올립니다. 이 기기에서 저장(5초)은 그대로 하고, 드라이브에는 위 간격과 창을 닫거나 다른 앱으로 넘어갈 때만 올립니다.${app.project.syncedSize ? ` 지금 이 작품 파일 크기: <b>${fmt(Math.max(1, Math.round(app.project.syncedSize / 1024)))}KB</b>` : ''}</p>`,
     buttons: st.connected
       ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '드라이브에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
       : [{ label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
@@ -452,6 +504,7 @@ export async function showDrive() {
   if (r.value === 'close') return;
   app.settings.driveClientId = r.form.cid.value.trim();
   app.settings.autoSync = r.form.auto.checked;
+  app.settings.syncMinutes = +r.form.every.value || 5;
   saveSettings();
   G.configure(app.settings.driveClientId);
   if (r.value === 'connect') {
@@ -470,11 +523,11 @@ export async function driveImport() {
     const files = await G.listBundles();
     const r = await dialog({
       title: '드라이브에서 불러오기',
-      body: `<div class="proj-list">${files.map((f) => `<button class="proj" value="${f.id}"><div class="info"><b>${h(f.name.replace(/\.novel\.json$/, ''))}</b><small>${fullTime(Date.parse(f.modifiedTime))} 저장 · ${fmt(Math.round((+f.size || 0) / 1024))}KB</small></div></button>`).join('') || '<p class="hint">드라이브에 올린 작품이 아직 없습니다.</p>'}</div>`,
+      body: `<div class="proj-list">${files.map((f) => `<button class="proj" value="${f.id}"><div class="info"><b>${h(f.name.replace(/\.novel\.json(\.gz)?$/, ''))}</b><small>${fullTime(Date.parse(f.modifiedTime))} 저장 · ${fmt(Math.round((+f.size || 0) / 1024))}KB</small></div></button>`).join('') || '<p class="hint">드라이브에 올린 작품이 아직 없습니다.</p>'}</div>`,
       buttons: [{ label: '닫기', value: 'close' }],
     });
     if (!r.value || r.value === 'close') return;
-    const b = await G.pullBundle(r.value);
+    const b = await G.pullBundle(r.value, S.readBundleBytes);
     const p = await S.importBundle(b);
     const f = files.find((x) => x.id === r.value);
     p.syncedAt = f.modifiedTime;

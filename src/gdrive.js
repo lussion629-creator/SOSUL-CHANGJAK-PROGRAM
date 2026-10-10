@@ -1,5 +1,5 @@
 // 구글 드라이브 동기화
-// - 사용자의 드라이브에 "소설 워드프로세서" 폴더를 만들고, 작품마다 백업 파일(제목.novel.json)을 올린다.
+// - 사용자의 드라이브에 "소설 워드프로세서" 폴더를 만들고, 작품마다 백업 파일(제목.novel.json.gz) 하나를 두고 덮어쓴다.
 // - 권한은 drive.file: 이 앱이 만든 파일만 볼 수 있다(드라이브의 다른 파일에는 접근하지 않음).
 // - 원고를 Word 파일이나 Google 문서로 드라이브에 따로 저장할 수도 있다.
 
@@ -105,19 +105,18 @@ async function findByProp(key, value) {
   return r.files?.[0] || null;
 }
 
-/** 작품 백업 올리기. 반환: {id, modifiedTime} */
-export async function pushBundle(bundle) {
+/** 작품 백업 올리기 (작품마다 파일 하나를 덮어쓴다). blob: 압축한 묶음. 반환: {id, modifiedTime, size} */
+export async function pushBundle(bundle, blob) {
   const parent = await ensureFolder();
   const pid = bundle.project.id;
-  const name = `${bundle.project.title || '작품'}.novel.json`;
-  const blob = new Blob([JSON.stringify(bundle)], { type: 'application/json' });
+  const name = `${bundle.project.title || '작품'}.novel.json${blob.type === 'application/json' ? '' : '.gz'}`;
   const existing = await findByProp('novelProjectId', pid);
   if (existing) {
-    return (await api(`${UPLOAD}/files/${existing.id}?uploadType=multipart&fields=id,modifiedTime`, {
+    return (await api(`${UPLOAD}/files/${existing.id}?uploadType=multipart&fields=id,modifiedTime,size`, {
       method: 'PATCH', body: multipart({ name }, blob),
     })).json();
   }
-  return (await api(`${UPLOAD}/files?uploadType=multipart&fields=id,modifiedTime`, {
+  return (await api(`${UPLOAD}/files?uploadType=multipart&fields=id,modifiedTime,size`, {
     method: 'POST', body: multipart({ name, parents: [parent], appProperties: { novelProjectId: pid } }, blob),
   })).json();
 }
@@ -130,8 +129,8 @@ export async function listBundles() {
   return r.files || [];
 }
 
-export async function pullBundle(fileId) {
-  return (await api(`${API}/files/${fileId}?alt=media`)).json();
+export async function pullBundle(fileId, read) {
+  return read(await (await api(`${API}/files/${fileId}?alt=media`)).arrayBuffer());
 }
 
 /** 원고 파일(docx 등)을 드라이브 폴더에 올린다. asGoogleDoc이면 Google 문서로 변환 */

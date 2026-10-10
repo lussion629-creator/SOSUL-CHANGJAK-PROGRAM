@@ -1,7 +1,29 @@
-// 원고를 A4 쪽 단위로 나눠 PDF처럼 보여 준다
-export function paginate(html, target, { header = '' } = {}) {
+import { textCss, numSide } from './layout.js';
+
+// 원고를 쪽 설정(없으면 A4)대로 쪽 단위로 나눠 PDF처럼 보여 준다
+export function paginate(html, target, { header = '', layout: L = null } = {}) {
   target.innerHTML = '';
   target.classList.add('pages');
+  if (L) {
+    // 길이는 모두 쪽 너비에 대한 비율로 (cqw = 쪽 너비의 1%)
+    const pc = (mm) => (mm / L.w) * 100;
+    const t = textCss(L);
+    const st = target.style;
+    st.setProperty('--pg-ratio', `${L.w} / ${L.h}`);
+    st.setProperty('--pg-t', `${pc(L.mt + L.mh)}cqw`);
+    st.setProperty('--pg-b', `${pc(L.mb + L.mf)}cqw`);
+    st.setProperty('--pg-font', t.fontFamily);
+    st.setProperty('--pg-size', `${pc(L.size * 25.4 / 72)}cqw`);
+    st.setProperty('--pg-line', t.lineHeight);
+    st.setProperty('--pg-ls', t.letterSpacing);
+    st.setProperty('--pg-indent', t.textIndent);
+    st.setProperty('--pg-align', t.textAlign);
+    st.setProperty('--pg-break', t.wordBreak);
+    st.setProperty('--pg-foot', `${pc(L.mb)}cqw`);
+    st.setProperty('--pg-ml', `${pc(L.ml)}cqw`);
+    st.setProperty('--pg-mr', `${pc(L.mr)}cqw`);
+    target.classList.add('laid');
+  }
   const src = document.createElement('div');
   src.innerHTML = html;
   const blocks = [...src.children];
@@ -13,8 +35,10 @@ export function paginate(html, target, { header = '' } = {}) {
     body = document.createElement('div');
     body.className = 'page-body prose';
     const foot = document.createElement('div');
-    foot.className = 'page-foot';
-    foot.textContent = String(++n);
+    ++n;
+    const side = L ? numSide(L, n + (+L.numStart || 1) - 1) : 'center';
+    foot.className = 'page-foot ' + side;
+    foot.textContent = side ? String(n + (L ? (+L.numStart || 1) - 1 : 0)) : '';
     if (header) {
       const h = document.createElement('div');
       h.className = 'page-head';

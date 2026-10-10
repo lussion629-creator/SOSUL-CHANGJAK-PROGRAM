@@ -1,4 +1,5 @@
 // 로컬 저장소 (IndexedDB). 모든 원고·자료·버전 기록은 기기 안에 먼저 저장된다.
+import { diffArrays } from 'diff';
 import { openDB } from 'idb';
 
 const DB_NAME = 'novel-writer';
@@ -143,9 +144,67 @@ export async function exportBundle(projectId, { withHistory = true } = {}) {
   return { format: 'novel-writer', version: 1, exported: Date.now(), project, chapters, notes, snapshots, daily };
 }
 
+// 버전 기록을 작게 묶기: 장마다 시간순으로 늘어놓고, 바로 앞 버전과 비교해 달라진 문단만 담는다.
+// d: [[앞 버전 문단 번호, 개수] | '새 문단 HTML', ...]  — 30만 자짜리 장도 버전 하나가 보통 몇 KB로 줄어든다.
+const splitBlocks = (html) => (html || '').split(/(?<=<\/(?:p|h[1-6]|blockquote|ul|ol|li)>|<hr>)/);
+export function packSnapshots(snaps) {
+  const byCh = new Map();
+  for (const s of snaps) (byCh.get(s.chapterId) || byCh.set(s.chapterId, []).get(s.chapterId)).push(s);
+  const out = [];
+  for (const list of byCh.values()) {
+    list.sort((a, b) => a.time - b.time);
+    let prev = null;
+    for (const s of list) {
+      const { html, ...meta } = s;
+      if (!prev) { out.push(s); prev = s; continue; }
+      const d = [];
+      let ai = 0, size = 0;
+      for (const part of diffArrays(splitBlocks(prev.html), splitBlocks(html))) {
+        if (part.removed) { ai += part.count; continue; }
+        if (part.added) { const t = part.value.join(''); d.push(t); size += t.length; continue; }
+        d.push([ai, part.count]); ai += part.count;
+      }
+      out.push(size > (html || '').length * 0.8 ? s : { ...meta, base: prev.id, d });
+      prev = s;
+    }
+  }
+  return out;
+}
+export function unpackSnapshots(snaps) {
+  const blocks = new Map();
+  return snaps.map((s) => {
+    if (!s.d) { blocks.set(s.id, splitBlocks(s.html)); return s; }
+    const { d, base, ...meta } = s;
+    const A = blocks.get(base) || [];
+    const B = [];
+    for (const x of d) {
+      if (typeof x === 'string') B.push(...splitBlocks(x));
+      else for (let k = x[0]; k < x[0] + x[1]; k++) B.push(A[k]);
+    }
+    blocks.set(s.id, B);
+    return { ...meta, html: B.join('') };
+  });
+}
+// 파일·드라이브에 올릴 묶음 (버전 기록은 바뀐 곳만)
+export const packBundle = (b) => ({ ...b, version: 2, snapshots: packSnapshots(b.snapshots || []) });
+
+// 드라이브용 압축 (gzip)
+export async function gzip(text) {
+  if (typeof CompressionStream === 'undefined') return new Blob([text], { type: 'application/json' });
+  return new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+}
+export async function readBundleBytes(buf) {
+  const u = new Uint8Array(buf.slice(0, 2));
+  if (u[0] === 0x1f && u[1] === 0x8b) {
+    return JSON.parse(await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+  }
+  return JSON.parse(new TextDecoder().decode(buf));
+}
+
 // 백업 묶음을 들여온다. 같은 id가 있으면 덮어쓰기 전에 현재 원고를 버전 기록으로 남긴다.
 export async function importBundle(b, { keepIds = true } = {}) {
   if (!b || b.format !== 'novel-writer') throw new Error('이 앱의 백업 파일이 아닙니다.');
+  if ((b.snapshots || []).some((s) => s.d)) b = { ...b, snapshots: unpackSnapshots(b.snapshots) };
   const d = await db();
   const map = new Map();
   const nid = (old) => { if (keepIds) return old; if (!map.has(old)) map.set(old, uid()); return map.get(old); };

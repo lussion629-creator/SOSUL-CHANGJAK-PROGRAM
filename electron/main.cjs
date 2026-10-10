@@ -81,7 +81,7 @@ function createWindow() {
     e.preventDefault();
     const done = () => { saved = true; win.close(); };
     win.webContents.executeJavaScript('window.__saveBeforeClose ? window.__saveBeforeClose() : null').then(done, done);
-    setTimeout(done, 3000);
+    setTimeout(done, 8000); // 드라이브에 올리는 중이면 조금 더 기다린다
   });
   win.webContents.on('did-start-loading', () => { ready = false; });
 

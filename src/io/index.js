@@ -7,18 +7,19 @@ import { readPdf } from './pdf.js';
 import { textBlocks, splitChapters, blocksToHtml, htmlToBlocks } from './model.js';
 import { htmlToParagraphs } from '../stats.js';
 
-export const OPEN_ACCEPT = '.docx,.doc,.hwpx,.hwp,.pdf,.rtf,.txt,.md,.html,.htm,.novel.json,.json';
+export const OPEN_ACCEPT = '.docx,.doc,.hwpx,.hwp,.pdf,.rtf,.txt,.md,.html,.htm,.novel.json,.json,.gz';
 
 /** @returns {Promise<{kind:'book', title, chapters:{title,html}[]} | {kind:'bundle', data}>} */
 export async function openFile(file, { onProgress } = {}) {
   const name = file.name;
-  const base = name.replace(/\.(novel\.json|[^.]+)$/i, '');
+  const base = name.replace(/\.(novel\.json(\.gz)?|[^.]+)$/i, '');
   const ext = (name.match(/\.([^.]+)$/) || [])[1]?.toLowerCase();
   const buf = await file.arrayBuffer();
   const asText = () => decodeText(buf);
 
-  if (ext === 'json') {
-    const data = JSON.parse(asText());
+  if (ext === 'json' || ext === 'gz') {
+    const { readBundleBytes } = await import('../store.js');
+    const data = await readBundleBytes(buf);
     if (data.format === 'novel-writer') return { kind: 'bundle', data };
     throw new Error('알 수 없는 JSON 파일입니다.');
   }
