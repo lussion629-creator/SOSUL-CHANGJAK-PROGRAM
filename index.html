@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>소설 워드프로세서</title>
+<meta name="description" content="소설가를 위한 워드프로세서 — 자동 저장, 버전 기록, 퇴고 비교, 구글 드라이브 동기화">
+<meta name="theme-color" content="#f6f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#17181b" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Nanum+Myeongjo:wght@400;700&family=Noto+Serif+KR:wght@400;700&family=Nanum+Gothic:wght@400;700&display=swap" rel="stylesheet">
+<script>
+  // 첫 화면 깜빡임 없이 테마 적용
+  try { const t = localStorage.getItem('nw-theme'); if (t && t !== 'auto') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body>
+<div id="app">
+  <!-- 상단 바 -->
+  <header class="topbar">
+    <button class="icon-btn only-mobile" id="btnSidebar" title="목록"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    <div class="menu-wrap">
+      <button class="menu-btn" data-menu="file">파일</button>
+      <div class="menu" id="menu-file">
+        <button data-act="home">작품 목록</button>
+        <button data-act="newProject">새 작품</button>
+        <hr>
+        <button data-act="open">파일 열기… <small>Word · 한글 · PDF · 텍스트</small></button>
+        <button data-act="importChapter">현재 작품에 장으로 넣기…</button>
+        <hr>
+        <button data-act="export">내보내기… <small>docx · doc · hwpx · PDF</small></button>
+        <button data-act="print">인쇄 / PDF로 저장</button>
+        <hr>
+        <button data-act="backup">작품 백업 파일 받기 (.novel.json)</button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button class="menu-btn" data-menu="view">보기</button>
+      <div class="menu" id="menu-view">
+        <button data-act="revision">퇴고 모드 (나란히 비교)</button>
+        <button data-act="focus">집중 모드</button>
+        <button data-act="cork">코르크보드 (장 카드)</button>
+        <hr>
+        <button data-act="theme">다크 모드 전환</button>
+        <button data-act="settings">글꼴·화면 설정</button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button class="menu-btn" data-menu="tools">도구</button>
+      <div class="menu" id="menu-tools">
+        <button data-act="find">찾기 / 바꾸기</button>
+        <button data-act="analyze">퇴고 도우미 (반복어·긴 문장)</button>
+        <button data-act="stats">하루 기록 그래프 <small>쓴·고친·지운 양</small></button>
+        <button data-act="goals">목표</button>
+        <button data-act="sprint">타이머 (글쓰기 스프린트)</button>
+        <button data-act="snapshot">지금 버전 저장 (이름 붙이기)</button>
+        <hr>
+        <button data-act="drive">구글 드라이브 연결</button>
+      </div>
+    </div>
+    <div class="doc-title">
+      <input id="projectTitle" spellcheck="false" aria-label="작품 제목">
+      <span class="sep">/</span>
+      <input id="chapterTitle" spellcheck="false" aria-label="장 제목">
+    </div>
+    <div class="top-right">
+      <span id="saveState" class="pill" title="손을 멈추고 5초 뒤 자동 저장">저장됨</span>
+      <button id="syncState" class="pill" data-act="drive" title="구글 드라이브">☁ 드라이브 꺼짐</button>
+      <button class="icon-btn" data-act="revision" title="퇴고 모드 (나란히 비교)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M6 9h3M6 13h3M15 9h3M15 13h3"/></svg></button>
+      <button class="icon-btn" data-act="focus" title="집중 모드"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button class="icon-btn" data-act="theme" title="다크 모드"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+    </div>
+  </header>
+
+  <!-- 서식 도구 -->
+  <div class="toolbar" id="toolbar">
+    <button data-cmd="undo" title="실행 취소 (Ctrl+Z)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+    <button data-cmd="redo" title="다시 실행 (Ctrl+Y)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+    <span class="tsep"></span>
+    <select id="blockType" title="문단 스타일">
+      <option value="p">본문</option>
+      <option value="h1">제목 1</option>
+      <option value="h2">제목 2</option>
+      <option value="h3">제목 3</option>
+      <option value="quote">인용</option>
+    </select>
+    <select id="fontFamily" title="글꼴">
+      <option value="">기본 글꼴</option>
+      <option value="'Gowun Batang'">고운바탕</option>
+      <option value="'Nanum Myeongjo'">나눔명조</option>
+      <option value="'Noto Serif KR'">본명조</option>
+      <option value="'Nanum Gothic'">나눔고딕</option>
+      <option value="Pretendard">프리텐다드</option>
+      <option value="Batang, serif">바탕 (설치된 글꼴)</option>
+    </select>
+    <select id="fontSize" title="글자 크기">
+      <option value="">크기</option>
+      <option>9pt</option><option>10pt</option><option>11pt</option><option>12pt</option><option>14pt</option><option>16pt</option><option>18pt</option><option>24pt</option><option>32pt</option>
+    </select>
+    <span class="tsep"></span>
+    <button data-cmd="bold" title="굵게 (Ctrl+B)"><b>가</b></button>
+    <button data-cmd="italic" title="기울임 (Ctrl+I)"><i>가</i></button>
+    <button data-cmd="underline" title="밑줄 (Ctrl+U)"><u>가</u></button>
+    <button data-cmd="strike" title="취소선"><s>가</s></button>
+    <label class="color-btn" title="글자 색"><span>가</span><input type="color" id="textColor" value="#c0392b"></label>
+    <button data-cmd="highlight" title="형광펜"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 11 6-6 4 4-6 6"/><path d="M9 11 6 18h5l2-3"/><path d="M4 21h16"/></svg></button>
+    <span class="tsep"></span>
+    <button data-cmd="left" title="왼쪽 정렬"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg></button>
+    <button data-cmd="center" title="가운데 정렬"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg></button>
+    <button data-cmd="right" title="오른쪽 정렬"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M10 10h10M4 14h16M10 18h10"/></svg></button>
+    <button data-cmd="justify" title="양쪽 정렬"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg></button>
+    <span class="tsep"></span>
+    <button data-cmd="bullet" title="글머리 목록"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="7" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="17" r="1"/><path d="M9 7h11M9 12h11M9 17h11"/></svg></button>
+    <button data-cmd="ordered" title="번호 목록"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 7h10M10 12h10M10 17h10M4 5h1v4M4 9h2M4 15h2l-2 3h2"/></svg></button>
+    <button data-cmd="scene" title="장면 전환 (* * *)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5.5 8.5l13 7M18.5 8.5l-13 7"/></svg></button>
+    <button data-cmd="clear" title="서식 지우기"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h11l-3 13M9 4h9M3 20 21 4"/></svg></button>
+    <span class="tsep"></span>
+    <button data-act="find" title="찾기 / 바꾸기 (Ctrl+F)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg></button>
+    <button data-act="snapshot" title="지금 버전 저장 (이름 붙이기)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg></button>
+  </div>
+
+  <div class="main">
+    <!-- 왼쪽: 원고·자료·기록 -->
+    <aside class="sidebar" id="sidebar">
+      <nav class="tabs">
+        <button data-tab="binder" class="on">원고</button>
+        <button data-tab="notes">자료</button>
+        <button data-tab="history">기록</button>
+      </nav>
+      <section class="tab" id="tab-binder">
+        <div class="tab-head">
+          <span id="projectCount"></span>
+          <button class="small" data-act="addChapter">+ 장 추가</button>
+        </div>
+        <ol id="chapterList" class="chapter-list"></ol>
+        <div class="tab-foot">
+          <label>이 장 줄거리</label>
+          <textarea id="chapterSynopsis" rows="3" placeholder="이 장에서 일어나는 일 (코르크보드 카드에 표시)"></textarea>
+          <label>상태</label>
+          <select id="chapterStatus">
+            <option value="idea">구상</option>
+            <option value="draft">초고</option>
+            <option value="revise">퇴고 중</option>
+            <option value="done">완료</option>
+          </select>
+        </div>
+      </section>
+      <section class="tab" id="tab-notes" hidden>
+        <div class="tab-head">
+          <select id="noteFilter">
+            <option value="all">전체</option>
+            <option value="character">인물</option>
+            <option value="place">장소</option>
+            <option value="world">설정·세계관</option>
+            <option value="item">사물·용어</option>
+            <option value="plot">플롯·복선</option>
+            <option value="memo">메모</option>
+          </select>
+          <button class="small" data-act="addNote">+ 새 자료</button>
+        </div>
+        <input id="noteSearch" class="search" placeholder="자료 검색">
+        <ul id="noteList" class="note-list"></ul>
+      </section>
+      <section class="tab" id="tab-history" hidden>
+        <div class="tab-head"><span>이 장의 버전 기록</span><button class="small" data-act="snapshot">+ 지금 저장</button></div>
+        <p class="hint">손을 멈추면 5초 뒤 저장되고, 몇 분마다 버전이 자동으로 쌓입니다. 누르면 비교하거나 되돌릴 수 있어요.</p>
+        <div id="historyList" class="history-list"></div>
+      </section>
+    </aside>
+
+    <!-- 가운데: 편집기 -->
+    <main class="workspace" id="workspace">
+      <div class="paper-scroll" id="paperScroll">
+        <div class="paper" id="paper">
+          <div id="editorHost"></div>
+        </div>
+      </div>
+
+      <!-- 퇴고 모드 -->
+      <div class="revision" id="revision" hidden>
+        <div class="rev-bar">
+          <div class="rev-group">
+            <label>비교 기준</label>
+            <select id="revBase"></select>
+          </div>
+          <div class="rev-group">
+            <label class="switch"><input type="checkbox" id="revMarks" checked><span></span> 바뀐 곳 표시</label>
+            <label class="switch"><input type="checkbox" id="revSync" checked><span></span> 함께 스크롤</label>
+          </div>
+          <div class="rev-group rev-stats" id="revStats"></div>
+          <button class="small" id="revChanges">변경 목록</button>
+          <button class="small" data-act="revision">닫기</button>
+        </div>
+        <div class="rev-panes" id="revPanes">
+          <section class="rev-pane" id="revLeft">
+            <div class="pane-head">
+              <span class="pane-title" id="revLeftTitle">이전</span>
+              <div class="seg"><button data-left="page" class="on">페이지</button><button data-left="flow">본문</button></div>
+              <button class="small" id="revRestore" title="이 버전으로 되돌리기">이 버전으로 되돌리기</button>
+            </div>
+            <div class="pane-body" id="revLeftBody"></div>
+          </section>
+          <section class="rev-pane" id="revRight">
+            <div class="pane-head">
+              <span class="pane-title">지금 원고</span>
+              <div class="seg"><button data-right="page">페이지</button><button data-right="edit" class="on">편집</button></div>
+            </div>
+            <div class="pane-body" id="revRightBody"></div>
+          </section>
+          <aside class="rev-changes" id="revChangeList" hidden></aside>
+        </div>
+      </div>
+
+      <!-- 코르크보드 -->
+      <div class="cork" id="cork" hidden>
+        <div class="rev-bar"><strong>코르크보드</strong><span class="hint">카드를 끌어 장 순서를 바꿀 수 있어요</span><button class="small" data-act="cork">닫기</button></div>
+        <div class="cork-grid" id="corkGrid"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- 아래 상태 줄 -->
+  <footer class="statusbar">
+    <span id="stChars" title="공백 포함 / 공백 제외"></span>
+    <span id="stManu" title="200자 원고지 기준"></span>
+    <span id="stTotal" title="작품 전체"></span>
+    <button class="today" id="stToday" data-act="stats" title="눌러서 날짜별 그래프 보기"></button>
+    <span class="goal" id="stGoal" data-act="goals" title="오늘 목표"><span class="bar"><i id="goalBar"></i></span><span id="goalText"></span></span>
+    <span id="stSprint" hidden></span>
+  </footer>
+
+  <!-- 찾기/바꾸기 -->
+  <div class="findbar" id="findbar" hidden>
+    <input id="findInput" placeholder="찾을 말">
+    <input id="replaceInput" placeholder="바꿀 말">
+    <span id="findCount"></span>
+    <button data-find="prev" title="이전">↑</button>
+    <button data-find="next" title="다음">↓</button>
+    <button data-find="one">바꾸기</button>
+    <button data-find="all">모두 바꾸기</button>
+    <label><input type="checkbox" id="findAllChapters"> 모든 장</label>
+    <button data-find="close">✕</button>
+  </div>
+</div>
+
+<!-- 대화 상자 -->
+<dialog id="dlg"><form method="dialog" id="dlgForm"></form></dialog>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="fileInput" hidden>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

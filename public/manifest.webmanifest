@@ -1,0 +1,20 @@
+{
+  "name": "소설 워드프로세서",
+  "short_name": "소설쓰기",
+  "description": "소설가를 위한 워드프로세서 — 자동 저장, 버전 기록, 퇴고 비교, 구글 드라이브 동기화",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f3ee",
+  "theme_color": "#7a4b2a",
+  "icons": [
+    {"src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml"},
+    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ],
+  "file_handlers": [
+    {"action": "./", "accept": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"], "application/hwp+zip": [".hwpx"], "application/x-hwp": [".hwp"], "application/msword": [".doc"], "application/pdf": [".pdf"], "application/rtf": [".rtf"], "text/plain": [".txt"]}}
+  ]
+}
