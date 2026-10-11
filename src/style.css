@@ -862,3 +862,16 @@ body.has-proof-rail.proof-right .paper-scroll { padding-right: 268px; }
 .pd-fix del { color: var(--del); text-decoration: line-through; }
 .pd-fix ins { color: var(--ins); text-decoration: none; font-weight: 600; }
 .pd-row .hint { margin-right: auto; }
+
+/* 원고 다듬기 표시 (고치지 않고 표시만) */
+:root { --tm: #b7791f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --tm: #e0b45a; } }
+:root[data-theme="dark"] { --tm: #e0b45a; }
+.ProseMirror .tm { background: color-mix(in srgb, var(--tm) 16%, transparent); border-bottom: 2px dotted var(--tm); border-radius: 2px; cursor: pointer; }
+.statusbar .st-tidy.has { color: var(--tm); }
+.tm-pop .pc-fix { font-family: var(--ed-font); font-size: 15px; }
+.tm-pop .pc-fix del { color: var(--del); text-decoration: line-through; }
+.tm-pop .pc-fix ins { color: var(--ins); text-decoration: none; font-weight: 600; }
+.tidy-mark-on { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.tidy-mark-on small { display: block; }
+@media print { .ProseMirror .tm { background: none; border: 0; } }

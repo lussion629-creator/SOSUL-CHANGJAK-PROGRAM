@@ -59,6 +59,7 @@ export const COMMANDS = [
   { id: 'sprint', label: '타이머', key: '', group: '도구' },
   { id: 'index', label: '찾아보기 (색인)', key: '', group: '도구' },
   { id: 'tidy', label: '원고 다듬기', key: '', group: '도구' },
+  { id: 'tidyMark', label: '원고 다듬기 표시 켜기/끄기', key: '', group: '도구' },
   { id: 'appear', label: '인물 등장 지도', key: '', group: '도구' },
   { id: 'keys', label: '단축키 설정 창', key: '', group: '도구' },
 ];

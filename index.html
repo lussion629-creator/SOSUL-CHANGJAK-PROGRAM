@@ -78,6 +78,7 @@
         <button data-act="proof">맞춤법·문장부호 교정 모드 켜기/끄기 <small data-kbd="proof" data-kbd-prefix="밑줄·왼쪽 여백 카드">밑줄·왼쪽 여백 카드, Ctrl+Alt+K</small></button>
         <button data-act="proofList">교정 목록·AI 맞춤법 검사 <small>자동·수동 고침, 틀린 곳 모아 고치기</small></button>
         <button data-act="tidy">원고 다듬기 <small>문장부호·띄어쓰기 정리</small></button>
+        <button data-act="tidyMark">원고 다듬기 표시 켜기/끄기 <small>고치지 않고 표시만</small></button>
         <button data-act="analyze">퇴고 도우미 <small>반복어·긴 문장</small></button>
         <button data-act="revision">퇴고 모드 <small>이전 버전과 나란히 비교</small></button>
         <hr>
@@ -338,6 +339,7 @@
     <span id="stSel" class="st-sel" hidden></span>
     <span id="pvZoom" hidden><span id="pvStat" title="이 장의 쪽 수"></span> <select class="pvzoom" id="pvZoomSel" title="쪽 보기 배율"><option value="fit">폭 맞춤</option><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option><option value="125">125%</option><option value="150">150%</option></select></span>
     <button class="st-proof" id="stProof" hidden></button>
+    <button class="st-proof st-tidy" id="stTidy" hidden title="원고 다듬기 규칙에 걸리는 곳 · 눌러서 다듬기 창"></button>
     <button class="today" id="stToday" data-act="today" title="오늘 쓴 양: 붙여넣기 뺀 양·포함한 양, 초기화"></button>
     <span class="goal" id="stGoal" data-act="goals" title="오늘 목표"><span class="bar"><i id="goalBar"></i></span><span id="goalText"></span></span>
     <span id="stSprint" hidden></span>

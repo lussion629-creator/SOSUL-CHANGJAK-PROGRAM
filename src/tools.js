@@ -1,6 +1,8 @@
 // 글쓰기 도구: 원고 다듬기(문장부호·띄어쓰기 일괄 정리), 인물 등장 지도, 장 나누기, 장 목표 분량
 import * as S from './store.js';
-import { app, saveNow, openChapter, addChapter, renderBinder } from './app.js';
+import { app, saveNow, openChapter, addChapter, renderBinder, saveSettings } from './app.js';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 export { chapterGoalHtml } from './goal.js';
 import { DOMSerializer } from '@tiptap/pm/model';
 import { parseHtml } from './sanitize.js';
@@ -100,11 +102,12 @@ export async function showTidy() {
   const r = await dialog({
     title: '원고 다듬기',
     body: `<p class="hint" style="margin:0">문장부호와 띄어쓰기를 한꺼번에 정리해요. 바꾸기 전 상태는 버전 기록에 남아서 언제든 되돌릴 수 있어요.</p>
-      <div class="tidy-rules">${RULES.map((x) => `<label class="check"><input type="checkbox" name="${x.id}" ${x.on ? 'checked' : ''}> <span>${x.label} <small class="hint">${h(x.hint)}</small></span></label>`).join('')}</div>
-      <label class="field"><span>말줄임표 모양</span><select name="ellipsisForm"><option value="…">… (가운데 점 셋, 한 글자)</option><option value="……">…… (가운데 점 여섯)</option><option value="...">... (마침표 셋)</option></select></label>
+      <div class="tidy-rules">${RULES.map((x) => `<label class="check"><input type="checkbox" name="${x.id}" ${tidyOpt()[x.id] ? 'checked' : ''}> <span>${x.label} <small class="hint">${h(x.hint)}</small></span></label>`).join('')}</div>
+      <label class="field"><span>말줄임표 모양</span><select name="ellipsisForm">${[['…', '… (가운데 점 셋, 한 글자)'], ['……', '…… (가운데 점 여섯)'], ['...', '... (마침표 셋)']].map(([v, l]) => `<option value="${v}" ${tidyOpt().ellipsisForm === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="check tidy-mark-on"><input type="checkbox" name="mark" ${isTidyMark() ? 'checked' : ''}> <span><b>고치지 않고 원고에 표시만 하기</b> <small class="hint">위에서 고른 규칙에 걸리는 곳에 노란 점선을 그어 둬요. 눌러 보면 어떻게 바뀌는지 나오고, 그 자리만 고칠 수도 있어요. 퇴고 메뉴에서 켜고 꺼요.</small></span></label>
       <label class="field"><span>범위</span><select name="scope"><option value="cur">이 장</option><option value="all">작품 전체 (${app.project.order.length}개 장)</option></select></label>
       <p class="hint tidy-count" aria-live="polite" style="margin:0"></p>`,
-    buttons: [{ label: '취소', value: 'close' }, { label: '다듬기', value: 'ok', primary: true }],
+    buttons: [{ label: '취소', value: 'close' }, { label: '표시만 하기', value: 'mark' }, { label: '다듬기', value: 'ok', primary: true }],
     onOpen: (f) => {
       const upd = () => {
         const opt = readTidy(f), fix = makeFixer(opt);
@@ -121,7 +124,12 @@ export async function showTidy() {
       upd();
     },
   });
-  if (r.value !== 'ok') return;
+  if (r.value === 'close') return;
+  // 고른 규칙은 다음에도 그대로 (표시만 하기도 이 규칙을 쓴다)
+  app.settings.tidy = readTidy(r.form);
+  if (r.value === 'mark' || r.form.mark.checked !== isTidyMark()) setTidyMark(r.value === 'mark' ? true : r.form.mark.checked);
+  else saveSettings(), refreshTidyMarks();
+  if (r.value === 'mark') return;
   const opt = readTidy(r.form), fix = makeFixer(opt);
   const ids = r.form.scope.value === 'cur' ? [app.cur] : app.project.order;
   let total = 0;
@@ -149,6 +157,142 @@ function readTidy(f) {
   const o = Object.fromEntries(RULES.map((x) => [x.id, f[x.id].checked]));
   o.ellipsisForm = f.ellipsisForm.value;
   return o;
+}
+
+// ---------- 원고 다듬기: 고치지 않고 표시만 ----------
+// 다듬기 규칙에 걸리는 곳에 노란 점선을 긋는다. 문단 노드마다 결과를 기억해 바뀐 문단만 다시 본다.
+export const tidyOpt = () => ({ ...Object.fromEntries(RULES.map((x) => [x.id, x.on])), ellipsisForm: '…', ...(app.settings.tidy || {}) });
+export const isTidyMark = () => !!app.settings.tidyMark;
+const RULE_NAME = Object.fromEntries(RULES.map((x) => [x.id, x.label]));
+// 문단 글 → 바꿀 곳 [{i, len, rep, rule}]
+export function tidySpots(text, opt = tidyOpt()) {
+  const out = [];
+  const add = (rule, re, fn) => { for (const m of text.matchAll(re)) { const to = fn(m); if (to != null && to !== m[0]) out.push({ i: m.index, len: m[0].length, rep: to, rule }); } };
+  const ell = opt.ellipsisForm || '…';
+  if (opt.ellipsis) add('ellipsis', /\.{3,}|。{3,}|…{1,2}|⋯+/g, (m) => (m[0] === ell ? null : ell));
+  if (opt.dash) add('dash', /(?<!-)--(?!-)|―|‒/g, () => '—');
+  if (opt.spaces) { add('spaces', /(?<=\S) {2,}/g, () => ' '); add('spaces', /(?<=\S)　{2,}/g, () => '　'); }
+  if (opt.punctSpace) add('punctSpace', / +(?=[.,!?;:…”’」』)\]])/g, () => '');
+  if (opt.quotes) add('quotes', /["']/g, (m) => { const p = text[m.index - 1]; const open = !p || /[\s(\[{“‘「『—-]/.test(p); return m[0] === '"' ? (open ? '“' : '”') : (open ? '‘' : '’'); });
+  if (opt.trim) { add('trim', /^[ 　\t]+/g, () => ''); add('trim', /[ 　\t]+$/g, () => ''); }
+  out.sort((a, b) => a.i - b.i || b.len - a.len);
+  return out.filter((x, k) => !out.slice(0, k).some((y) => x.i < y.i + y.len && y.i < x.i + x.len));
+}
+const tmKey = new PluginKey('tidyMarks');
+let tmMemo = new WeakMap(), tmSig = '';
+const vis = (t) => (t === '' ? '(지움)' : t.trim() ? t : `빈칸 ${t.length}칸`);
+function tidyDeco(doc) {
+  const opt = tidyOpt();
+  const sig = JSON.stringify(opt);
+  if (sig !== tmSig) { tmMemo = new WeakMap(); tmSig = sig; }
+  const decos = [];
+  let n = 0;
+  doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true;
+    let list = tmMemo.get(node);
+    if (!list) { list = tidySpots(node.textBetween(0, node.content.size, null, '￼'), opt); tmMemo.set(node, list); }
+    for (const x of list) {
+      n++;
+      decos.push(Decoration.inline(pos + 1 + x.i, pos + 1 + x.i + x.len, { class: 'tm', title: `${RULE_NAME[x.rule]}: ${vis(text(node, x))} → ${vis(x.rep)} (눌러서 고치기)` }, { spot: { ...x, from: pos + 1 + x.i, to: pos + 1 + x.i + x.len } }));
+    }
+    return false;
+  });
+  return { deco: DecorationSet.create(doc, decos), n };
+}
+const text = (node, x) => node.textBetween(0, node.content.size, null, '￼').slice(x.i, x.i + x.len);
+const tmPlugin = new Plugin({
+  key: tmKey,
+  state: {
+    init: () => ({ deco: DecorationSet.empty, n: 0 }),
+    apply(tr, prev, _o, state) {
+      const meta = tr.getMeta(tmKey);
+      if (!isTidyMark()) return prev.n || prev.deco !== DecorationSet.empty ? { deco: DecorationSet.empty, n: 0 } : prev;
+      if (meta) return tidyDeco(state.doc);
+      if (!tr.docChanged) return prev;
+      return { deco: prev.deco.map(tr.mapping, tr.doc), n: prev.n }; // 쓰는 동안은 위치만 따라가고 잠깐 멈추면 다시
+    },
+  },
+  props: {
+    decorations: (state) => tmKey.getState(state).deco,
+    handleClick(view, pos, e) {
+      if (!isTidyMark()) return false;
+      const hit = tmKey.getState(view.state).deco.find(pos, pos).find((d) => d.from <= pos && pos <= d.to);
+      if (!hit) { closeTmPop(); return false; }
+      setTimeout(() => openTmPop(view, hit.spec.spot, hit.from, hit.to), 0);
+      return false;
+    },
+  },
+  view(view) {
+    let t = null;
+    const kick = () => { clearTimeout(t); t = setTimeout(() => { if (view.composing) { kick(); return; } if (isTidyMark()) view.dispatch(view.state.tr.setMeta(tmKey, 1).setMeta('addToHistory', false)); }, 500); };
+    return { update(v, p) { if (v.state.doc !== p.doc && isTidyMark()) kick(); }, destroy() { clearTimeout(t); } };
+  },
+});
+export function refreshTidyMarks() {
+  const ed = app.editor;
+  if (!ed) return;
+  ed.view.dispatch(ed.state.tr.setMeta(tmKey, 1).setMeta('addToHistory', false));
+  const st = $('#stTidy');
+  if (st) {
+    const n = tmKey.getState(ed.state).n;
+    st.hidden = !isTidyMark();
+    st.textContent = n ? `다듬을 곳 ${fmt(n)}` : '다듬을 곳 없음';
+    st.classList.toggle('has', n > 0);
+  }
+}
+export function setTidyMark(on, quiet = false) {
+  app.settings.tidyMark = on;
+  saveSettings();
+  closeTmPop();
+  refreshTidyMarks();
+  document.querySelectorAll('[data-act=tidyMark]').forEach((b) => b.classList.toggle('on', on));
+  if (!quiet) toast(on ? `원고 다듬기 규칙에 걸리는 곳을 노란 점선으로 표시해요 (${fmt(tmKey.getState(app.editor.state).n)}곳). 고치지는 않아요.` : '원고 다듬기 표시를 껐어요.');
+}
+export const toggleTidyMark = () => setTidyMark(!isTidyMark());
+let tmPop = null;
+function closeTmPop() { tmPop?.remove(); tmPop = null; }
+function openTmPop(view, x, from, to) {
+  closeTmPop();
+  const word = view.state.doc.textBetween(from, to, '\n', '￼');
+  tmPop = document.createElement('div');
+  tmPop.className = 'proof-pop tm-pop';
+  tmPop.innerHTML = `<div class="pp-k" style="color:var(--tm)">원고 다듬기 · ${h(RULE_NAME[x.rule])}</div>
+    <div class="pc-fix"><del>${h(vis(word))}</del> → <ins>${h(vis(x.rep))}</ins></div>
+    <div class="pp-to"><button type="button" class="primary" data-a="fix">이것만 고치기</button><button type="button" data-a="all">다듬기 창…</button></div>
+    <div class="pp-more"><button type="button" data-a="off">표시 끄기</button></div>`;
+  document.body.append(tmPop);
+  const r = view.coordsAtPos(from);
+  const w = tmPop.offsetWidth, hh = tmPop.offsetHeight;
+  Object.assign(tmPop.style, { left: Math.max(8, Math.min(innerWidth - w - 8, r.left - 12)) + 'px', top: Math.max(8, r.bottom + 8 + hh > innerHeight - 8 ? r.top - hh - 8 : r.bottom + 8) + 'px' });
+  tmPop.addEventListener('mousedown', (e) => e.preventDefault());
+  tmPop.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.a === 'fix') {
+      const st = view.state;
+      if (st.doc.textBetween(from, to, '\n', '￼') === word) view.dispatch(x.rep ? st.tr.insertText(x.rep, from, to) : st.tr.delete(from, to));
+      refreshTidyMarks();
+    }
+    if (b.dataset.a === 'all') showTidy();
+    if (b.dataset.a === 'off') setTidyMark(false);
+    closeTmPop();
+    app.editor.commands.focus();
+  });
+}
+export function bindTidyMarks() {
+  app.editor.registerPlugin(tmPlugin);
+  app.editor.on('transaction', ({ transaction }) => {
+    if (transaction.getMeta(tmKey)) {
+      const st = $('#stTidy'), n = tmKey.getState(app.editor.state).n;
+      if (st) { st.hidden = !isTidyMark(); st.textContent = n ? `다듬을 곳 ${fmt(n)}` : '다듬을 곳 없음'; st.classList.toggle('has', n > 0); }
+    }
+  });
+  app.hooks.afterOpen.push(() => setTimeout(refreshTidyMarks, 0));
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') closeTmPop(); });
+  addEventListener('mousedown', (e) => { if (tmPop && !tmPop.contains(e.target) && !e.target.closest?.('.tm')) closeTmPop(); }, true);
+  $('#stTidy')?.addEventListener('click', () => showTidy());
+  document.querySelectorAll('[data-act=tidyMark]').forEach((b) => b.classList.toggle('on', isTidyMark()));
+  refreshTidyMarks();
 }
 
 // ---------- 인물 등장 지도 ----------
