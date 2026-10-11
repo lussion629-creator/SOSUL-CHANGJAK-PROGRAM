@@ -15,7 +15,7 @@ import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, pr
 
 const DEFAULTS = {
   font: "'Gowun Batang', 'Nanum Myeongjo', Batang, serif", size: 17, lineHeight: 1.9, width: 720,
-  indent: true, paraSpacing: 0, theme: 'auto', bgColor: '', bgColors: [], smartQuotes: true, typewriter: false, dimFocus: true,
+  indent: true, paraSpacing: 0, theme: 'auto', bgColor: '', bgColors: [], inkMode: 'auto', hlMode: 'auto', smartQuotes: true, typewriter: false, dimFocus: true,
   snapshotMinutes: 3, autoSaveSeconds: 5, driveClientId: '', syncTarget: 'drive', syncAsked: false, syncServer: '', autoSync: true, syncMinutes: 5, author: '',
 };
 

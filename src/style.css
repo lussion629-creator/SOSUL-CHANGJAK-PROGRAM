@@ -937,3 +937,12 @@ body.has-proof-rail.proof-right .paper-scroll { padding-right: 268px; }
 .cl-hex input { width: 78px; font-family: ui-monospace, monospace; }
 .cl-new2 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .cl-new2 input { flex: 1; min-width: 140px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); }
+
+/* 보색 글자·형광펜 */
+.cl-ink { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cl-sample { padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; font-family: var(--ed-font); font-size: 15px; }
+.cl-sample mark { background: var(--hl); color: var(--hl-ink, inherit); border-radius: 2px; padding: 0 2px; }
+@media screen {
+  :root[data-hl="comp"] .ProseMirror mark, :root[data-hl="comp"] .prose mark,
+  :root[data-hl="comp"] .ProseMirror mark[data-color], :root[data-hl="comp"] .prose mark[data-color] { background: var(--hl) !important; color: var(--hl-ink) !important; }
+}

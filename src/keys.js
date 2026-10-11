@@ -45,6 +45,7 @@ export const COMMANDS = [
   { id: 'revision', label: '퇴고 모드', key: '', group: '보기' },
   { id: 'theme', label: '다크 모드 전환', key: '', group: '보기' },
   { id: 'colors', label: '화면 색 (라이트·다크·내 색)', key: '', group: '보기' },
+  { id: 'complement', label: '보색 글자·형광펜 켜기/끄기', key: '', group: '보기' },
   { id: 'addChapter', label: '새 장', key: '', group: '장' },
   { id: 'split', label: '커서 자리에서 장 나누기', key: '', group: '장' },
   { id: 'prevChapter', label: '앞 장으로', key: 'Ctrl+Alt+ArrowUp', group: '장' },
