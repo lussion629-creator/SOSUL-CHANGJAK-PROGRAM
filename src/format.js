@@ -4,7 +4,7 @@ import { FONTS } from './fonts.js';
 import { layoutOf } from './layout.js';
 import { isPageView } from './pageview.js';
 import { PARA_KEYS, runCommand, HL_COLORS, TEXT_COLORS, hlColor, setHlColor, hexOf } from './editor.js';
-import { saveSettings } from './app.js';
+import { saveSettings, followsLayout } from './app.js';
 import { keyOf, pretty } from './keys.js';
 const kb = (id) => pretty(keyOf(id));
 import { $, h, toast, dialog } from './ui.js';
@@ -14,7 +14,7 @@ import { $, h, toast, dialog } from './ui.js';
 export function currentSize() {
   const v = app.editor.getAttributes('textStyle').fontSize;
   if (v) { const n = parseFloat(v); return v.endsWith('px') ? n * 0.75 : n; }
-  if (isPageView()) return layoutOf().size;
+  if (isPageView() || followsLayout()) return layoutOf().size;
   const el = app.editor.view.domAtPos(app.editor.state.selection.from).node;
   const node = el.nodeType === 1 ? el : el.parentElement;
   return Math.round(parseFloat(getComputedStyle(node).fontSize) * 0.75 * 2) / 2 || 12;

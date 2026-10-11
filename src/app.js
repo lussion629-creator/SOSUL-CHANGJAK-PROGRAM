@@ -7,6 +7,7 @@ import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { countHtml, countText, fmt } from './stats.js';
 import { parseHtml, sanitizeHtml } from './sanitize.js';
 import { chapterGoalHtml } from './goal.js';
+import { layoutOf, textCss, bodyBox, mm2px } from './layout.js';
 import { editAmounts, netAmounts, summarize, summaryLine, where, esc } from './diff.js';
 import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, promptDlg } from './ui.js';
 
@@ -41,14 +42,33 @@ export function saveSettings() {
   try { localStorage.setItem('nw-settings', JSON.stringify(app.settings)); localStorage.setItem('nw-theme', app.settings.theme); } catch { /* 무시 */ }
   applySettings();
 }
+// 원고 글자를 쪽 설정(글꼴·크기·줄 간격·자간·들여쓰기·문단 간격·정렬·줄 나눔·본문 폭)대로 그릴지
+export const followsLayout = () => app.settings.followLayout !== false && !!app.project;
+export const screenZoom = () => (app.settings.edZoom || 130) / 100;
 export function applySettings() {
   const s = app.settings, r = document.documentElement.style;
-  r.setProperty('--ed-font', s.font);
-  r.setProperty('--ed-size', s.size + 'px');
-  r.setProperty('--ed-line', s.lineHeight);
-  r.setProperty('--ed-width', s.width + 'px');
-  r.setProperty('--ed-indent', s.indent ? '1em' : '0');
-  r.setProperty('--ed-para', s.paraSpacing + 'em');
+  if (followsLayout()) {
+    // 쪽 보기가 아니어도 쪽 설정과 같은 글자·같은 줄 바꿈으로 (화면 배율만 키워서)
+    const L = layoutOf(), z = screenZoom(), t = textCss(L, z);
+    r.setProperty('--ed-font', t.fontFamily);
+    r.setProperty('--ed-size', t.fontSize);
+    r.setProperty('--ed-line', t.lineHeight);
+    r.setProperty('--ed-width', `calc(${(mm2px(bodyBox(L).w) * z).toFixed(1)}px + 160px)`);
+    r.setProperty('--ed-indent', t.textIndent);
+    r.setProperty('--ed-para', t.paraAfter);
+    r.setProperty('--ed-ls', t.letterSpacing);
+    r.setProperty('--ed-align', t.textAlign);
+    r.setProperty('--ed-break', t.wordBreak);
+    r.setProperty('--pv-z', String(z));
+  } else {
+    r.setProperty('--ed-font', s.font);
+    r.setProperty('--ed-size', s.size + 'px');
+    r.setProperty('--ed-line', s.lineHeight);
+    r.setProperty('--ed-width', s.width + 'px');
+    r.setProperty('--ed-indent', s.indent ? '1em' : '0');
+    r.setProperty('--ed-para', s.paraSpacing + 'em');
+    for (const k of ['--ed-ls', '--ed-align', '--ed-break', '--pv-z']) r.removeProperty(k);
+  }
   if (s.theme === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = s.theme;
   document.body.classList.toggle('dim', !!s.dimFocus);
@@ -343,6 +363,7 @@ export async function openProject(id) {
   await S.putProject(p);
   await S.kvSet('lastProject', id);
   $('#projectTitle').value = p.title;
+  applySettings(); // 작품마다 쪽 설정이 다르다
   document.title = `${p.title} — 소설 워드프로세서`;
   const total = [...app.chapters.values()].reduce((n, c) => n + (c._count = countHtml(c.html)).withSpace, 0);
   const d = S.today();

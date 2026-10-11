@@ -53,6 +53,7 @@ export const COMMANDS = [
   { id: 'readPrev', label: '낭독: 앞 조각', key: '', group: '낭독' },
   { id: 'readStop', label: '낭독 그만', key: '', group: '낭독' },
   { id: 'readSettings', label: '낭독 설정', key: '', group: '낭독' },
+  { id: 'aiSettings', label: 'AI 글 모델', key: '', group: '낭독' },
   { id: 'readCast', label: '등장인물 목소리', key: '', group: '낭독' },
   { id: 'speak', label: '이 문단 기기 목소리로 읽기', key: '', group: '낭독' },
   { id: 'sprint', label: '타이머', key: '', group: '도구' },

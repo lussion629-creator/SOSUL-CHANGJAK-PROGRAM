@@ -11,7 +11,9 @@ import { setSearch, gotoMatch, findMatches } from './editor.js';
 import { $, $$, h, toast, dialog, confirmDlg, promptDlg, ago, fullTime } from './ui.js';
 import { parseHtml, sanitizeHtml } from './sanitize.js';
 import { isAnno, annoListItem, editAnno, annosForExport } from './annotate.js';
-import { layoutOf, fontName, textCss, readHwpxLayout } from './layout.js';
+import { layoutOf, fontName, textCss, readHwpxLayout, setProjectLayout } from './layout.js';
+import { FONTS } from './fonts.js';
+import { applyPageView } from './pageview.js';
 import { showPageSetup, layoutSummary } from './pagesetup.js';
 
 // ---------- 파일 선택 ----------
@@ -444,6 +446,9 @@ function endSprint(cancel) {
 // ---------- 설정 ----------
 export async function showSettings() {
   const s = app.settings;
+  const L = layoutOf();
+  const follow = s.followLayout !== false;
+  const lfonts = FONTS.some((x) => x[0] === L.font) ? FONTS : [[L.font, fontName(L.font)], ...FONTS];
   const fonts = [
     ["'Gowun Batang', 'Nanum Myeongjo', Batang, serif", '고운바탕'],
     ["'Nanum Myeongjo', Batang, serif", '나눔명조'],
@@ -455,12 +460,30 @@ export async function showSettings() {
   ];
   const r = await dialog({
     title: '글꼴·화면 설정',
-    body: `<label class="field"><span>원고 글꼴</span><select name="font">${fonts.map(([v, l]) => `<option value="${h(v)}" ${v === s.font ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    body: `<label class="check"><input type="checkbox" name="follow" ${follow ? 'checked' : ''}> <b>원고 글자를 쪽 설정대로</b> <small>쪽 보기가 아닐 때도 쪽 설정의 글꼴·크기·줄 간격·자간으로 쓰고, 줄도 쪽과 똑같이 바뀌어요</small></label>
+      <div class="fl-on" ${follow ? '' : 'hidden'}>
+        <label class="field"><span>원고 글꼴</span><select name="lfont">${lfonts.map(([v, l]) => `<option value="${h(v)}" ${v === L.font ? 'selected' : ''}>${h(l)}</option>`).join('')}</select></label>
+        <div class="row3">
+          <label class="field"><span>글자 크기 (pt)</span><input name="lsize" type="number" min="6" max="40" step="0.5" value="${L.size}"></label>
+          <label class="field"><span>줄 간격 (%)</span><input name="lline" type="number" min="100" max="400" step="5" value="${L.line}"></label>
+          <label class="field"><span>자간 (%)</span><input name="lspacing" type="number" min="-50" max="50" step="1" value="${L.spacing}"></label>
+          <label class="field"><span>첫 줄 들여쓰기 (글자)</span><input name="lindent" type="number" min="0" max="4" step="0.5" value="${L.indent}"></label>
+          <label class="field"><span>문단 뒤 간격 (pt)</span><input name="lpara" type="number" min="0" max="40" step="1" value="${L.paraAfter}"></label>
+          <label class="field"><span>화면 배율 (%)</span><input name="zoom" type="number" min="60" max="250" step="5" value="${s.edZoom || 130}"></label>
+        </div>
+        <p class="hint" style="margin:0">쪽 설정(${h(L.templateName || '직접 정한 설정')})과 같은 값이에요. 여기서 바꾸면 쪽 설정도 함께 바뀌어요. 용지·여백·정렬은 <a href="#" data-ps>쪽 설정</a>에서 바꿔요. 화면 배율은 화면에서만 키우는 값이라 인쇄·내보내기에는 영향이 없어요.</p>
+      </div>
+      <div class="fl-off" ${follow ? 'hidden' : ''}>
+      <label class="field"><span>원고 글꼴</span><select name="font">${fonts.map(([v, l]) => `<option value="${h(v)}" ${v === s.font ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <div class="row2">
         <label class="field"><span>글자 크기 (px)</span><input name="size" type="number" min="12" max="30" value="${s.size}"></label>
         <label class="field"><span>줄 간격</span><input name="lineHeight" type="number" min="1.2" max="3" step="0.1" value="${s.lineHeight}"></label>
         <label class="field"><span>원고 폭 (px)</span><input name="width" type="number" min="480" max="1200" step="20" value="${s.width}"></label>
         <label class="field"><span>문단 사이 간격 (줄)</span><input name="paraSpacing" type="number" min="0" max="2" step="0.25" value="${s.paraSpacing}"></label>
+      </div>
+      <label class="check"><input type="checkbox" name="indent" ${s.indent ? 'checked' : ''}> 문단 첫 줄 들여쓰기</label>
+      </div>
+      <div class="row2">
         <label class="field"><span>화면 테마</span><select name="theme">
           <option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>기기 설정 따르기</option>
           <option value="light" ${s.theme === 'light' ? 'selected' : ''}>밝게</option>
@@ -468,15 +491,25 @@ export async function showSettings() {
           <option value="sepia" ${s.theme === 'sepia' ? 'selected' : ''}>종이색</option></select></label>
         <label class="field"><span>자동 버전 간격 (분)</span><select name="snapshotMinutes">${[1, 3, 5, 10, 30].map((m) => `<option ${m === s.snapshotMinutes ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
       </div>
-      <label class="check"><input type="checkbox" name="indent" ${s.indent ? 'checked' : ''}> 문단 첫 줄 들여쓰기</label>
       <label class="check"><input type="checkbox" name="smartQuotes" ${s.smartQuotes ? 'checked' : ''}> 따옴표 자동 변환 (" → “ ”)</label>
       <label class="check"><input type="checkbox" name="typewriter" ${s.typewriter ? 'checked' : ''}> 집중 모드에서 타자기 스크롤 (쓰는 줄을 화면 가운데에)</label>
       <label class="check"><input type="checkbox" name="dimFocus" ${s.dimFocus ? 'checked' : ''}> 집중 모드에서 지금 문단만 밝게</label>
       <p class="hint" style="margin:0">자동 저장: 손을 멈추고 5초 뒤 이 기기에 저장됩니다. 버전 기록은 위 간격마다 쌓이고, 3일이 지난 자동 버전은 1시간에 하나, 30일이 지나면 하루에 하나만 남깁니다(직접 저장한 버전은 그대로).</p>`,
     buttons: [{ label: '취소', value: 'close' }, { label: '저장', value: 'ok', primary: true }],
+    onOpen: (f) => {
+      f.follow.addEventListener('change', () => { f.querySelector('.fl-on').hidden = !f.follow.checked; f.querySelector('.fl-off').hidden = f.follow.checked; });
+      f.querySelector('[data-ps]').addEventListener('click', (e) => { e.preventDefault(); f.requestSubmit(f.querySelector('.dlg-foot button[value=ok]')); setTimeout(() => showPageSetup(), 0); });
+    },
   });
   if (r.value !== 'ok') return;
   const f = r.form;
+  s.followLayout = f.follow.checked;
+  if (f.follow.checked) {
+    s.edZoom = Math.max(60, Math.min(250, +f.zoom.value || 130));
+    const num = (x, d) => (Number.isFinite(+x.value) && x.value !== '' ? +x.value : d);
+    const next = { ...L, font: f.lfont.value, size: num(f.lsize, L.size), line: num(f.lline, L.line), spacing: num(f.lspacing, L.spacing), indent: num(f.lindent, L.indent), paraAfter: num(f.lpara, L.paraAfter) };
+    if (['font', 'size', 'line', 'spacing', 'indent', 'paraAfter'].some((k) => String(next[k]) !== String(L[k]))) { await setProjectLayout(next, null); applyPageView(); }
+  }
   Object.assign(s, {
     font: f.font.value, size: +f.size.value, lineHeight: +f.lineHeight.value, width: +f.width.value, paraSpacing: +f.paraSpacing.value,
     theme: f.theme.value, snapshotMinutes: +f.snapshotMinutes.value, indent: f.indent.checked, smartQuotes: f.smartQuotes.checked,

@@ -5,7 +5,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import * as S from './store.js';
 import { app, saveSettings } from './app.js';
 import { $, h, toast, dialog } from './ui.js';
-import { askText, getKey, cfg } from './reader.js';
+import { askJSON, aiLabel, aiMissing, showAiSettings } from './ai.js';
 
 // ---------- 규칙 ----------
 const jong = (ch) => { const c = (ch || '').charCodeAt(0) - 0xac00; return c >= 0 && c < 11172 ? c % 28 : -1; };
@@ -346,8 +346,6 @@ async function aiCheck({ signal, onProgress } = {}) {
   if (cur.length) chunks.push(cur);
   const schema = { type: 'OBJECT', properties: { errors: { type: 'ARRAY', items: { type: 'OBJECT', properties: { p: { type: 'INTEGER' }, wrong: { type: 'STRING' }, right: { type: 'STRING' }, kind: { type: 'STRING', enum: ['맞춤법', '띄어쓰기', '문장부호'] }, why: { type: 'STRING' } }, required: ['p', 'wrong', 'right', 'kind'] } } }, required: ['errors'] };
   const found = [];
-  const c = cfg();
-  const key = getKey();
   for (let k = 0; k < chunks.length; k++) {
     onProgress?.(k, chunks.length);
     const ch = chunks[k];
@@ -358,7 +356,7 @@ async function aiCheck({ signal, onProgress } = {}) {
 - 틀린 곳이 없으면 빈 목록.
 
 ${ch.map((p, i) => `[${i + 1}] ${p.text}`).join('\n')}`;
-    const r = await askText(prompt, schema, { key, c, signal });
+    const r = await askJSON(prompt, schema, { signal });
     for (const e of r.errors || []) {
       const p = ch[(e.p || 0) - 1];
       if (!p || !e.wrong || e.wrong === e.right) continue;
@@ -403,10 +401,12 @@ export async function showProof() {
         <div class="proof-rule-grid">${RULES.map((x) => `<label class="check"><input type="checkbox" data-rule="${x.id}" ${offRules().has(x.id) ? '' : 'checked'}> <span>${h(x.label)} <small class="hint">${h(x.hint)}</small></span></label>`).join('')}</div>
         <p class="hint" style="margin:6px 0 0">이 작품에서 무시한 말: <span id="pfIgn"></span></p>
       </details>
-      <p class="hint" style="margin:0">자주 틀리는 맞춤법·띄어쓰기와 문장부호는 이 기기 안에서 바로 찾아요. 더 꼼꼼히 보려면 ‘AI로 검사’를 눌러 주세요 (낭독 설정의 Gemini 키를 써요).</p>
+      <div class="ai-pick"><span>AI 검사 모델</span><b>${h(aiLabel())}</b><button type="button" class="small" data-p="aiset">바꾸기…</button></div>
+      <p class="hint" style="margin:0">자주 틀리는 맞춤법·띄어쓰기와 문장부호는 이 기기 안에서 바로 찾아요. 더 꼼꼼히 보려면 ‘AI로 검사’를 눌러 주세요. Gemini·GPT·Claude 중에서 고를 수 있어요.</p>
     </div>`,
-    buttons: [{ label: '닫기', value: 'close', primary: true }],
+    buttons: [{ label: 'AI', value: 'aiset' }, { label: '닫기', value: 'close', primary: true }],
     onOpen: (f) => {
+      f.querySelector('.dlg-foot button[value=aiset]').hidden = true;
       const msg = $('#pfMsg');
       const ctx = (x) => {
         const d = app.editor.state.doc;
@@ -448,6 +448,7 @@ export async function showProof() {
           const ed = app.editor;
           ed.chain().setTextSelection({ from: x.from, to: x.to }).scrollIntoView().run();
         }
+        if (b.dataset.p === 'aiset') { f.requestSubmit(f.querySelector('.dlg-foot button[value=aiset]')); return; }
         if (b.dataset.p === 'fixall') {
           const list = current().filter((y) => y.fix.length).sort((p, q) => q.from - p.from);
           const ed = app.editor;
@@ -463,7 +464,8 @@ export async function showProof() {
           msg.textContent = n ? `${n}곳을 고쳤어요. 마음에 안 들면 Ctrl+Z로 한 번에 되돌릴 수 있어요.` : '';
         }
         if (b.dataset.p === 'ai') {
-          if (!getKey()) { msg.textContent = 'Gemini API 키가 없어요. 낭독 → 낭독 설정에서 키를 넣어 주세요.'; return; }
+          const miss = aiMissing();
+          if (miss) { msg.textContent = miss; return; }
           busy?.abort(); busy = new AbortController();
           b.disabled = true;
           msg.textContent = 'AI가 읽는 중…';
@@ -479,7 +481,7 @@ export async function showProof() {
     },
   });
   busy?.abort();
-  void r;
+  if (r.value === 'aiset') await showAiSettings({ back: () => showProof() });
 }
 
 // ---------- 시작 ----------

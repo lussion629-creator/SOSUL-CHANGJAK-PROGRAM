@@ -22,10 +22,11 @@ import { bindKeys, showKeys } from './keys.js';
 import * as T from './tools.js';
 import * as R from './reader.js';
 import * as PF from './proof.js';
+import { showAiSettings } from './ai.js';
 const ACTIONS = {
   checkUpdate: () => window.desktop?.checkUpdate?.(),
   readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
-  proof: () => PF.toggleProof(), proofList: () => PF.showProof(),
+  proof: () => PF.toggleProof(), proofList: () => PF.showProof(), aiSettings: () => showAiSettings(),
   annotate: () => A.addAnnotation(), index: () => A.showIndex(), keys: () => showKeys(), tidy: () => T.showTidy(), appear: () => T.showAppearances(),
   annoSide: () => { const nx = { right: 'left', left: 'off', off: 'right' }[app.settings.annoSide || 'right']; A.setAnnoSide(nx); toast({ right: '주석을 오른쪽 여백에 보여 줘요.', left: '주석을 왼쪽 여백에 보여 줘요.', off: '여백 주석을 숨겼어요. 주석 글자를 누르면 볼 수 있어요.' }[nx]); },
   annoSticky: () => { const on = !app.settings.annoSticky; A.setAnnoSticky(on); toast(on ? '주석을 포스트잇으로 붙여 보여 줘요. 끌어서 옮기고, 두 번 누르면 고쳐요.' : '주석 포스트잇을 뗐어요.'); },
@@ -216,7 +217,7 @@ function bind() {
     print: () => ACTIONS.print(),
     undo: () => runCommand(app.editor, 'undo'), redo: () => runCommand(app.editor, 'redo'),
     find: () => F.openFind(), replace: () => { F.openFind(); $('#replaceInput').focus(); },
-    proof: () => PF.toggleProof(), proofList: () => PF.showProof(),
+    proof: () => PF.toggleProof(), proofList: () => PF.showProof(), aiSettings: () => showAiSettings(),
     annotate: () => A.addAnnotation(), annoSticky: () => ACTIONS.annoSticky(), scene: () => runCommand(app.editor, 'scene'), snapshot: () => manualSnapshot(),
     bold: () => runCommand(app.editor, 'bold'), italic: () => runCommand(app.editor, 'italic'), underline: () => runCommand(app.editor, 'underline'),
     strike: () => runCommand(app.editor, 'strike'), highlight: () => runCommand(app.editor, 'highlight'), clear: () => runCommand(app.editor, 'clear'),
