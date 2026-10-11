@@ -640,3 +640,11 @@ body.has-anno-rail.anno-left .paper-scroll { padding-left: 268px; }
 .today-mode legend { font-size: 12px; color: var(--ink2); padding: 0 4px; }
 .today-mode .radio { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .today-mode small, #stToday small { color: var(--ink3); font-size: 11px; }
+.menu .menu-cap { margin: 4px 10px 2px; font-size: 11px; color: var(--ink3); letter-spacing: .02em; }
+/* 좁은 화면: 메뉴가 많아 위 줄을 옆으로 밀어 볼 수 있게 (메뉴 창은 fixed라 잘리지 않음) */
+@media (max-width: 560px) {
+  .topbar { overflow-x: auto; scrollbar-width: none; }
+  .topbar::-webkit-scrollbar { display: none; }
+  .topbar > * { flex-shrink: 0; }
+  .menu-btn { padding: 6px 5px; }
+}

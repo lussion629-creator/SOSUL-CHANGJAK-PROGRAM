@@ -43,7 +43,6 @@
       <button class="menu-btn" data-menu="view">보기</button>
       <div class="menu" id="menu-view">
         <button data-act="pageView">쪽 보기 켜기/끄기 <small>용지 모양대로 한 쪽씩</small></button>
-        <button data-act="revision">퇴고 모드 (나란히 비교)</button>
         <button data-act="focus">집중 모드</button>
         <button data-act="book">장 이어서 전체 보기 <small>모든 장을 한 번에</small></button>
         <button data-act="cork">코르크보드 (장 카드)</button>
@@ -70,28 +69,54 @@
       </div>
     </div>
     <div class="menu-wrap">
-      <button class="menu-btn" data-menu="tools">도구</button>
-      <div class="menu" id="menu-tools">
-        <button data-act="find">찾기 / 바꾸기</button>
-        <button data-act="annotate">주석 달기 <small data-kbd="annotate" data-kbd-prefix="색인·교정 제안·인용·의도">색인·교정 제안·인용·의도, Ctrl+Alt+M</small></button>
-        <button data-act="index">찾아보기 (색인 목록)</button>
-        <button data-act="analyze">퇴고 도우미 (반복어·긴 문장)</button>
+      <button class="menu-btn" data-menu="edit">퇴고</button>
+      <div class="menu" id="menu-edit">
+        <p class="menu-cap">찾기·고치기</p>
+        <button data-act="find">찾기 / 바꾸기 <small data-kbd="find">Ctrl+F</small></button>
         <button data-act="tidy">원고 다듬기 <small>문장부호·띄어쓰기 정리</small></button>
+        <button data-act="analyze">퇴고 도우미 <small>반복어·긴 문장</small></button>
+        <button data-act="revision">퇴고 모드 <small>이전 버전과 나란히 비교</small></button>
+        <hr>
+        <p class="menu-cap">주석·자료</p>
+        <button data-act="annotate">주석 달기 <small data-kbd="annotate" data-kbd-prefix="색인·교정 제안·인용·의도">색인·교정 제안·인용·의도, Ctrl+Alt+M</small></button>
+        <button data-act="index">찾아보기 <small>색인 목록</small></button>
         <button data-act="appear">인물 등장 지도 <small>장마다 몇 번 나오나</small></button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button class="menu-btn" data-menu="read">낭독</button>
+      <div class="menu" id="menu-read">
         <button data-act="readAloud">AI로 읽어 주기 <small data-kbd="readAloud" data-kbd-prefix="커서·고른 부분부터">커서·고른 부분부터, Ctrl+Alt+R</small></button>
         <button data-act="readChapter">이 장 처음부터 읽어 주기</button>
+        <button data-act="speak">이 문단만 기기 목소리로 <small>Esc로 멈춤</small></button>
+        <hr>
         <button data-act="readExport">음성 파일로 저장 <small>WAV · 장·작품 전체</small></button>
         <button data-act="readSettings">낭독 설정 <small>Gemini 키·목소리·빠르기</small></button>
-        <button data-act="speak">이 문단만 기기 목소리로 <small>Esc로 멈춤</small></button>
-        <button data-act="stats">하루 기록 그래프 <small>쓴·고친·지운 양</small></button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button class="menu-btn" data-menu="log">기록</button>
+      <div class="menu" id="menu-log">
+        <p class="menu-cap">쓴 양·목표</p>
+        <button data-act="today">오늘 쓴 양 <small>붙여넣기 따로·초기화</small></button>
+        <button data-act="stats">날짜별 기록 그래프 <small>쓴·고친·지운 양</small></button>
         <button data-act="goals">목표</button>
-        <button data-act="sprint">타이머 (글쓰기 스프린트)</button>
-        <button data-act="snapshot">지금 버전 저장 (이름 붙이기)</button>
+        <button data-act="sprint">타이머 <small>글쓰기 스프린트</small></button>
+        <hr>
+        <p class="menu-cap">버전·복구</p>
+        <button data-act="snapshot">지금 버전 저장 <small>이름 붙이기</small></button>
         <button data-act="recover">실수 되돌리기 · 복구 <small>휴지통</small></button>
+      </div>
+    </div>
+    <div class="menu-wrap">
+      <button class="menu-btn" data-menu="tools">설정</button>
+      <div class="menu" id="menu-tools">
+        <button data-act="settings">글꼴·화면 설정</button>
         <button data-act="keys">단축키 설정</button>
-        <button data-act="checkUpdate" id="mUpdate" hidden>업데이트 확인 <small id="mVersion"></small></button>
+        <button data-act="readSettings">낭독 설정 <small>Gemini 키·목소리</small></button>
         <hr>
         <button data-act="drive">구글 드라이브 연결</button>
+        <button data-act="checkUpdate" id="mUpdate" hidden>업데이트 확인 <small id="mVersion"></small></button>
       </div>
     </div>
     <div class="doc-title">
