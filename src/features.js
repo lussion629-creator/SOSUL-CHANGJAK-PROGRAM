@@ -1,9 +1,10 @@
 // 작품 목록, 파일 열기/내보내기, 자료실, 목표, 퇴고 도우미, 타이머, 설정, 드라이브, 찾기, 집중 모드, 코르크보드
 import * as S from './store.js';
 import * as G from './gdrive.js';
+import * as SV from './syncserver.js';
 import {
   app, saveNow, openProject, openChapter, addChapter, renderBinder, saveSettings, applySettings, updateCounts,
-  todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, bundleForSync, STATUS, projectTotal, beforeImport,
+  todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, setSyncState, usingServer, bundleForSync, STATUS, projectTotal, beforeImport,
 } from './app.js';
 import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
@@ -41,7 +42,7 @@ export async function fillProjectMenu(m) {
     ${list.length > 12 ? `<button data-act="home"><span>다른 작품 ${list.length - 12}개 더 보기…</span></button>` : ''}
     <hr><button data-act="newProject"><span>새 작품 만들기…</span><small>제목 정하기</small></button>
     <button data-act="renameProject"><span>지금 작품 제목 바꾸기</span></button>
-    <button data-act="driveImport"><span>구글 드라이브에서 불러오기…</span></button>
+    <button data-act="syncImport"><span>${usingServer() ? '동기화 서버' : '구글 드라이브'}에서 불러오기…</span></button>
     <button data-act="open"><span>파일 열기…</span><small>hwpx·docx·pdf…</small></button>
     <button data-act="home"><span>작품 목록 관리…</span><small>삭제</small></button>`;
 }
@@ -96,7 +97,7 @@ export async function showHome() {
   });
   if (r.value === 'new') newProject();
   else if (r.value === 'open') openFromFile();
-  else if (r.value === 'drive') driveImport();
+  else if (r.value === 'drive') syncImport();
 }
 
 export async function newProject(title) {
@@ -540,10 +541,11 @@ export async function showDrive() {
         <select name="every" aria-label="올리는 간격">${[1, 5, 10, 30].map((m) => `<option value="${m}" ${+app.settings.syncMinutes === m ? 'selected' : ''}>${m}분마다</option>`).join('')}</select></div>
       <p class="hint" style="margin:0;line-height:1.6">작품마다 드라이브에 <b>파일 하나</b>만 두고 그 파일을 덮어씁니다. 새 파일이 쌓이지 않아요. 원고는 압축하고, 버전 기록은 앞 버전과 달라진 문단만 담아 올립니다. 이 기기에서 저장(5초)은 그대로 하고, 드라이브에는 위 간격과 창을 닫거나 다른 앱으로 넘어갈 때만 올립니다.${app.project.syncedSize ? ` 지금 이 작품 파일 크기: <b>${fmt(Math.max(1, Math.round(app.project.syncedSize / 1024)))}KB</b>` : ''}</p>`,
     buttons: st.connected
-      ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '드라이브에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
-      : [{ label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
+      ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '동기화 서버로 바꾸기', value: 'server', left: true }, { label: '드라이브에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
+      : [{ label: '동기화 서버로 바꾸기', value: 'server', left: true }, { label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
   });
   if (r.value === 'close') return;
+  if (r.value === 'server') { showServer(); return; }
   app.settings.driveClientId = r.form.cid.value.trim();
   app.settings.autoSync = r.form.auto.checked;
   app.settings.syncMinutes = +r.form.every.value || 5;
@@ -551,8 +553,8 @@ export async function showDrive() {
   G.configure(app.settings.driveClientId);
   if (r.value === 'connect') {
     if (!app.settings.driveClientId) { toast('클라이언트 ID를 넣어 주세요.'); return; }
-    try { await G.connect(); toast('구글 드라이브에 연결했어요.'); await syncNow(); } catch (e) { toast('연결하지 못했습니다: ' + e.message, 7000); }
-  } else if (r.value === 'sync') await syncNow();
+    try { await G.connect(); useTarget('drive'); toast('구글 드라이브에 연결했어요.'); await syncNow(); } catch (e) { toast('연결하지 못했습니다: ' + e.message, 7000); }
+  } else if (r.value === 'sync') { useTarget('drive'); await syncNow(); }
   else if (r.value === 'import') await driveImport();
   else if (r.value === 'off') { G.disconnect(); toast('연결을 끊었어요. 드라이브의 파일은 그대로 남습니다.'); }
   refreshSyncPill();
@@ -574,6 +576,111 @@ export async function driveImport() {
     const p = await S.importBundle(b);
     const f = files.find((x) => x.id === r.value);
     p.syncedAt = f.modifiedTime;
+    await S.putProject(p);
+    await openProject(p.id);
+    toast(`“${p.title}”을(를) 불러왔어요.`);
+  } catch (e) { toast(e.message, 6000); }
+}
+
+// ---------- 동기화: 구글 드라이브 / 동기화 서버 중 고른 곳 ----------
+function useTarget(t) {
+  if (app.settings.syncTarget === t) return;
+  app.settings.syncTarget = t;
+  saveSettings();
+  setSyncState('', '');
+  refreshSyncPill();
+}
+export const showSync = () => (usingServer() ? showServer() : showDrive());
+export const syncImport = () => (usingServer() ? serverImport() : driveImport());
+
+// ---------- 동기화 서버 ----------
+export async function showServer() {
+  const st = SV.status();
+  const on = usingServer() && st.configured;
+  const here = st.url ? '' : await SV.sameOriginServer(); // 앱을 서버 주소로 열었으면 그 주소를 미리 넣는다
+  const url = st.url || here || app.settings.syncServer || '';
+  const last = app.project.srvSyncedAt;
+  const r = await dialog({
+    title: '동기화 서버 연결',
+    wide: true,
+    body: `<p style="margin:0;line-height:1.6">직접 띄운 <b>동기화 서버</b>에 작품을 맞춰 두고, 데스크톱·노트북·휴대폰 어디서든 같은 작품을 이어 씁니다. 서버는 내 컴퓨터·NAS·클라우드 서버 어디에 띄워도 돼요.</p>
+      ${on ? `<p class="pill ${st.error ? 'err' : 'ok'}" style="justify-self:start">${st.error ? h(st.error) : `연결됨 · ${last ? '마지막 동기화 ' + fullTime(Date.parse(last)) : '아직 동기화 전'}`}</p>` : ''}
+      <details ${st.configured ? '' : 'open'}><summary>서버 띄우는 법</summary>
+        <ol class="steps">
+          <li>Node.js가 있는 컴퓨터에서 이 프로그램 저장소를 받고 <code>npm ci && npm run build</code> 다음 <code>npm run server</code> 를 실행합니다. (Docker라면 <code>docker build -f server/Dockerfile -t novel-sync .</code> 후 <code>docker run -d -p 8787:8787 -v novel-data:/data novel-sync</code>)</li>
+          <li>처음 켜면 화면에 <b>접속 암호</b>가 나오고 <code>data/access-code.txt</code> 에도 적혀요. 직접 정하려면 <code>SYNC_CODE</code> 환경 변수에 8자 이상으로 넣습니다.</li>
+          <li>아래에 서버 주소(예: <code>http://192.168.0.10:8787</code>, <code>https://novel.example.com</code>)와 접속 암호를 넣습니다. 다른 기기에서는 서버 주소를 브라우저로 열어 바로 앱을 써도 돼요.</li>
+        </ol>
+        <p class="hint" style="margin:0">집 밖에서도 쓰려면 서버를 https 주소로 열어 주세요(공유기 포트 열기, Cloudflare Tunnel, Tailscale 등). 웹 버전(https)에서는 http 주소 서버에 붙지 못하니, 그때는 데스크톱 앱을 쓰거나 서버 주소로 앱을 여세요.</p>
+      </details>
+      <label class="field"><span>서버 주소</span><input name="url" value="${h(url)}" placeholder="http://192.168.0.10:8787" autocomplete="url" spellcheck="false"></label>
+      <label class="field"><span>접속 암호</span><input name="code" type="password" value="" placeholder="${SV.savedCode() ? '저장되어 있음 (바꿀 때만 입력)' : '서버를 켤 때 나온 접속 암호'}" autocomplete="off" spellcheck="false"></label>
+      <label class="check"><input type="checkbox" name="remember" ${sessionStorageHas() ? '' : 'checked'}> 이 기기에 접속 암호 기억하기</label>
+      <div class="ai-test"><button type="button" class="small" data-a="test">연결 시험</button><span id="svOut" class="hint" aria-live="polite"></span></div>
+      <div class="sync-row"><label class="check"><input type="checkbox" name="auto" ${app.settings.autoSync ? 'checked' : ''}> 자동으로 서버에 올리기</label>
+        <select name="every" aria-label="올리는 간격">${[1, 5, 10, 30].map((m) => `<option value="${m}" ${+app.settings.syncMinutes === m ? 'selected' : ''}>${m}분마다</option>`).join('')}</select></div>
+      <p class="hint" style="margin:0;line-height:1.6">작품마다 서버에 <b>파일 하나</b>를 두고 덮어쓰며, 서버는 덮어쓰기 전 판을 몇 개 따로 남겨 둡니다. 다른 기기에서 먼저 올렸으면 그걸 받아 온 뒤 올리고, 이 기기에서 쓰던 원고는 버전 기록에 남아요. 접속 암호는 이 기기에만 저장되고 백업·동기화 파일에 들어가지 않아요.${app.project.srvSyncedSize ? ` 지금 이 작품 파일 크기: <b>${fmt(Math.max(1, Math.round(app.project.srvSyncedSize / 1024)))}KB</b>` : ''}</p>`,
+    buttons: on
+      ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '구글 드라이브로 바꾸기', value: 'drive', left: true }, { label: '서버에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
+      : [{ label: '구글 드라이브로 바꾸기', value: 'drive', left: true }, { label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
+    onOpen: (f) => {
+      const out = $('#svOut');
+      f.addEventListener('click', async (e) => {
+        if (e.target.closest('[data-a=test]')) {
+          out.textContent = '확인하는 중…';
+          try { await SV.test(f.url.value, f.code.value.trim() || SV.savedCode()); out.textContent = '✓ 서버에 연결됐어요.'; } catch (err) { out.textContent = '✕ ' + err.message; }
+        }
+      });
+    },
+  });
+  if (r.value === 'close') return;
+  if (r.value === 'drive') { useTarget('drive'); showDrive(); return; }
+  const f = r.form;
+  const nextUrl = SV.normUrl(f.url.value);
+  const typed = f.code.value.trim();
+  app.settings.syncServer = nextUrl;
+  app.settings.autoSync = f.auto.checked;
+  app.settings.syncMinutes = +f.every.value || 5;
+  saveSettings();
+  if (r.value === 'off') {
+    SV.disconnect();
+    useTarget('drive');
+    toast('서버 연결을 끊었어요. 서버의 작품은 그대로 남습니다.');
+    refreshSyncPill();
+    return;
+  }
+  const code = typed || SV.savedCode();
+  if (code && (r.value === 'connect' || typed || f.remember.checked === sessionStorageHas())) SV.saveCode(code, f.remember.checked);
+  SV.configure(nextUrl);
+  if (r.value === 'connect') {
+    if (!nextUrl) { toast('서버 주소를 넣어 주세요.'); return; }
+    if (!code) { toast('접속 암호를 넣어 주세요.'); return; }
+    try { await SV.test(nextUrl, code); } catch (e) { toast('연결하지 못했습니다: ' + e.message, 7000); refreshSyncPill(); return; }
+    useTarget('server');
+    toast('동기화 서버에 연결했어요.');
+    await syncNow();
+  } else if (r.value === 'sync') await syncNow();
+  else if (r.value === 'import') await serverImport();
+  refreshSyncPill();
+}
+function sessionStorageHas() { try { return !!sessionStorage.getItem('nw-sync-code'); } catch { return false; } }
+
+export async function serverImport() {
+  if (!SV.status().configured) { showServer(); return; }
+  try {
+    const files = await SV.listBundles();
+    const here = new Set((await S.listProjects()).map((p) => p.id));
+    const r = await dialog({
+      title: '동기화 서버에서 불러오기',
+      body: `<div class="proj-list">${files.map((f) => `<button class="proj" value="${h(f.id)}"><div class="info"><b>${h(f.name)}</b><small>${fullTime(Date.parse(f.modifiedTime))} 저장 · ${fmt(Math.max(1, Math.round((+f.size || 0) / 1024)))}KB${here.has(f.id) ? ' · 이 기기에도 있음' : ''}</small></div></button>`).join('') || '<p class="hint">서버에 올린 작품이 아직 없습니다.</p>'}</div>`,
+      buttons: [{ label: '닫기', value: 'close' }],
+    });
+    if (!r.value || r.value === 'close') return;
+    const f = files.find((x) => x.id === r.value);
+    const b = await SV.pullBundle(r.value, S.readBundleBytes);
+    await beforeImport();
+    const p = await S.importBundle(b);
+    p.srvSyncedAt = f.modifiedTime;
     await S.putProject(p);
     await openProject(p.id);
     toast(`“${p.title}”을(를) 불러왔어요.`);

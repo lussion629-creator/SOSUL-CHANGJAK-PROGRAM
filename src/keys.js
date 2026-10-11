@@ -54,6 +54,7 @@ export const COMMANDS = [
   { id: 'readStop', label: '낭독 그만', key: '', group: '낭독' },
   { id: 'readSettings', label: '낭독 설정', key: '', group: '낭독' },
   { id: 'aiSettings', label: 'AI 글 모델', key: '', group: '낭독' },
+  { id: 'server', label: '동기화 서버 연결', key: '', group: '파일' },
   { id: 'readCast', label: '등장인물 목소리', key: '', group: '낭독' },
   { id: 'speak', label: '이 문단 기기 목소리로 읽기', key: '', group: '낭독' },
   { id: 'sprint', label: '타이머', key: '', group: '도구' },

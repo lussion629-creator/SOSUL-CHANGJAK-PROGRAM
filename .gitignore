@@ -9,3 +9,8 @@ release
 *.pem
 *.key
 client_secret*.json
+
+# 동기화 서버가 보관하는 작품과 접속 암호
+data/
+server/data/
+access-code.txt

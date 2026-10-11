@@ -13,6 +13,7 @@ self.addEventListener('fetch', (e) => {
   const sameOrigin = url.origin === location.origin;
   const fonts = /fonts\.(googleapis|gstatic)\.com$/.test(url.hostname);
   if (!sameOrigin && !fonts) return; // 구글 로그인·드라이브 요청은 건드리지 않는다
+  if (url.pathname.includes('/api/')) return; // 동기화 서버와 주고받는 작품은 저장해 두지 않는다
   // 페이지는 네트워크 먼저(새 버전 반영), 나머지는 캐시 먼저
   if (req.mode === 'navigate') {
     e.respondWith(fetch(req).then((r) => { const cp = r.clone(); caches.open(CACHE).then((c) => c.put('./index.html', cp)); return r; }).catch(() => caches.match('./index.html')));

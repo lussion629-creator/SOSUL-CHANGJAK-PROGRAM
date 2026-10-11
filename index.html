@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>소설 워드프로세서</title>
-<meta name="description" content="소설가를 위한 워드프로세서 — 자동 저장, 버전 기록, 퇴고 비교, 구글 드라이브 동기화">
+<meta name="description" content="소설가를 위한 워드프로세서 — 자동 저장, 버전 기록, 퇴고 비교, 동기화 서버·구글 드라이브 동기화">
 <meta name="theme-color" content="#efebe4" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#17181b" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
@@ -124,6 +124,7 @@
         <button data-act="aiSettings">AI 글 모델 <small>대사 판정·AI 맞춤법 검사 · Gemini·GPT·Claude</small></button>
         <button data-act="readSettings">낭독 설정 <small>Gemini 키·목소리</small></button>
         <hr>
+        <button data-act="server">동기화 서버 연결 <small>데스크톱·노트북 어디서든 이어 쓰기</small></button>
         <button data-act="drive">구글 드라이브 연결</button>
         <button data-act="checkUpdate" id="mUpdate" hidden>업데이트 확인 <small id="mVersion"></small></button>
       </div>
@@ -139,7 +140,7 @@
     </div>
     <div class="top-right">
       <span id="saveState" class="pill" title="손을 멈추고 5초 뒤 자동 저장">저장됨</span>
-      <button id="syncState" class="pill" data-act="drive" title="구글 드라이브">☁ 드라이브 꺼짐</button>
+      <button id="syncState" class="pill" data-act="sync" title="동기화">☁ 동기화 꺼짐</button>
       <button class="icon-btn" id="btnPageView" data-act="pageView" title="쪽 보기 (용지 모양대로)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="11" height="14" rx="1"/><path d="M8 21h10a1 1 0 0 0 1-1V7"/><path d="M7 7h5M7 10h5M7 13h3"/></svg></button>
       <button class="icon-btn" data-act="revision" title="퇴고 모드 (나란히 비교)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16M6 9h3M6 13h3M15 9h3M15 13h3"/></svg></button>
       <button class="icon-btn" data-act="focus" title="집중 모드"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg></button>

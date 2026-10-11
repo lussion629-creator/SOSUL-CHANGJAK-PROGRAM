@@ -1,9 +1,10 @@
 import './style.css';
 import * as S from './store.js';
 import * as G from './gdrive.js';
+import * as SV from './syncserver.js';
 import {
   app, loadSettings, initEditor, openProject, openChapter, saveNow, addChapter, chapterMenu, bindBinderDrag,
-  renderHistory, summarizePeriod, snapshotMenu, manualSnapshot, toggleTheme, toggleSidebar, isTabOpen, refreshSyncPill, scheduleSync, syncNow, flushSync, renderBinder,
+  renderHistory, summarizePeriod, snapshotMenu, manualSnapshot, toggleTheme, toggleSidebar, isTabOpen, refreshSyncPill, scheduleSync, syncNow, flushSync, syncBackend, renderBinder,
 } from './app.js';
 import { runCommand, setSearch } from './editor.js';
 import { openRevision, closeRevision, isRevisionOpen, bindRevision, revisionOnChapterChange } from './revision.js';
@@ -41,7 +42,7 @@ const ACTIONS = {
   bookPlain: () => { closeRevision(); toggleBook(!(isBookOpen() && app.settings.bookNoCh), { noCh: true }); },
   bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
   lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1), lsReset: () => setSpacing(null), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
-  drive: F.showDrive, driveImport: F.driveImport,
+  drive: F.showDrive, driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport,
   renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
   addChapter: () => addChapter(), addNote: () => F.editNote(null),
 };
@@ -55,6 +56,8 @@ async function boot() {
   app.hooks.toolbar = () => { showSizeInBox(); showSpacingInBox(); };
   G.configure(app.settings.driveClientId);
   G.onChange(refreshSyncPill);
+  SV.configure(app.settings.syncServer);
+  SV.onChange(refreshSyncPill);
 
   // 처음 실행이면 예시 작품을 만든다
   let pid = await S.kvGet('lastProject');
@@ -90,7 +93,7 @@ async function boot() {
   bindRevision();
   F.bindCork();
   refreshSyncPill();
-  if (G.status().connected) syncNow({ quiet: true });
+  if (syncBackend().status().connected) syncNow({ quiet: true });
   registerSW();
   // 다른 곳에서 넘겨받은 파일 열기: 데스크톱 앱(연결 프로그램), 설치한 웹앱(파일 연결)
   if (window.desktop?.checkUpdate) { $('#mUpdate').hidden = false; window.desktop.version().then((v) => { if (v) $('#mVersion').textContent = `지금 ${v}`; }); }

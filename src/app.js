@@ -1,6 +1,7 @@
 // 앱 상태와 핵심 동작: 작품·장 불러오기, 5초 자동 저장, 버전 기록, 원고 목록, 통계
 import * as S from './store.js';
 import * as G from './gdrive.js';
+import * as SV from './syncserver.js';
 import { createEditor, activeState, docParagraphs } from './editor.js';
 import { EditorState } from '@tiptap/pm/state';
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
@@ -14,7 +15,7 @@ import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, pr
 const DEFAULTS = {
   font: "'Gowun Batang', 'Nanum Myeongjo', Batang, serif", size: 17, lineHeight: 1.9, width: 720,
   indent: true, paraSpacing: 0, theme: 'auto', smartQuotes: true, typewriter: false, dimFocus: true,
-  snapshotMinutes: 3, autoSaveSeconds: 5, driveClientId: '', autoSync: true, syncMinutes: 5, author: '',
+  snapshotMinutes: 3, autoSaveSeconds: 5, driveClientId: '', syncTarget: 'drive', syncServer: '', autoSync: true, syncMinutes: 5, author: '',
 };
 
 export const app = {
@@ -802,17 +803,22 @@ export function toggleSidebar(open) {
 }
 function closeSidebarMobile() { if (matchMedia('(max-width: 820px)').matches) toggleSidebar(false); }
 
-// ---------- 구글 드라이브 자동 동기화 ----------
+// ---------- 자동 동기화 (구글 드라이브 또는 직접 띄운 동기화 서버) ----------
 // 자동 동기화: 저장할 때마다가 아니라 정해 둔 간격(기본 5분)에 한 번만 올린다.
 // 바뀐 게 없으면 올리지 않고, 창을 닫거나 다른 앱으로 넘어갈 때는 바로 올린다.
+// 둘 중 하나만 쓴다(settings.syncTarget). 작품에는 어디와 마지막으로 맞췄는지 따로 적어 둔다.
+export const usingServer = () => app.settings.syncTarget === 'server';
+export const syncBackend = () => (usingServer() ? SV : G);
+const syncKey = () => (usingServer() ? 'srvSyncedAt' : 'syncedAt');
+export const syncedAtOf = (p) => p?.[syncKey()];
 let pushedAt = 0;
 function needReconnect() {
-  const st = G.status();
+  const st = syncBackend().status();
   if (app.settings.autoSync && st.configured && st.hadToken && !st.connected) setSyncState('err', '☁ 다시 연결해 주세요');
 }
 export function scheduleSync(delay) {
   app.syncPending = true;
-  if (!app.settings.autoSync || !G.status().connected) { needReconnect(); return; }
+  if (!app.settings.autoSync || !syncBackend().status().connected) { needReconnect(); return; }
   if (app.syncTimer) return; // 이미 예약됨
   const every = (+app.settings.syncMinutes || 5) * 60e3;
   const wait = delay ?? Math.max(10e3, pushedAt + every - Date.now());
@@ -820,7 +826,7 @@ export function scheduleSync(delay) {
 }
 export function flushSync() {
   if (!app.syncPending || !app.settings.autoSync) return null;
-  if (!G.status().connected) { needReconnect(); return null; }
+  if (!syncBackend().status().connected) { needReconnect(); return null; }
   clearTimeout(app.syncTimer); app.syncTimer = null;
   return syncNow({ quiet: true });
 }
@@ -836,41 +842,61 @@ export async function bundleForSync() {
   return S.packBundle(await S.exportBundle(app.project.id));
 }
 
+// 다른 기기에서 올린 것을 받아 와 이 기기 작품에 덮는다 (이 기기에서 쓰던 원고는 버전 기록에 남는다)
+async function pullRemote(B, key, remote) {
+  const b = await B.pullBundle(remote.id, S.readBundleBytes);
+  // 받는 동안 쓴 글까지 저장하고(가져오기 전에 버전으로 남는다) 그동안은 입력을 잠시 막는다
+  app.editor.setEditable(false);
+  try {
+    await saveNow();
+    clearTimeout(app.saveTimer); app.dirty = false;
+    await S.importBundle(b);
+  } finally { app.editor.setEditable(true); }
+  const p = await S.getProject(app.project.id);
+  p[key] = remote.modifiedTime;
+  await S.putProject(p);
+  app.cur = null;
+  await openProject(p.id);
+  toast('다른 기기에서 고친 내용을 가져왔어요. 이 기기에서 쓰던 내용은 버전 기록에 남아 있습니다.', 6000);
+}
+
 let syncing = false;
 export async function syncNow({ quiet = false } = {}) {
   if (syncing || !app.project) return;
   syncing = true;
+  const B = syncBackend();
+  const key = syncKey();
+  const server = B === SV;
   try {
     await saveNow();
     setSyncState('', '☁ 동기화 중…');
-    // 다른 기기에서 더 새로 올렸으면 먼저 받아 온다
-    const remote = await G.remoteInfo(app.project.id);
-    if (remote && app.project.syncedAt && Date.parse(remote.modifiedTime) > Date.parse(app.project.syncedAt) + 1000) {
-      const b = await G.pullBundle(remote.id, S.readBundleBytes);
-      // 받는 동안 쓴 글까지 저장하고(가져오기 전에 버전으로 남는다) 그동안은 입력을 잠시 막는다
-      app.editor.setEditable(false);
+    for (let round = 0; ; round++) {
+      // 다른 기기에서 더 새로 올렸으면 먼저 받아 온다
+      const remote = await B.remoteInfo(app.project.id);
+      const mine = app.project[key];
+      const newer = remote && (server
+        ? remote.modifiedTime !== mine // 서버 시각은 서버가 정하니 다르면 다른 기기가 올린 것
+        : mine && Date.parse(remote.modifiedTime) > Date.parse(mine) + 1000);
+      if (newer) await pullRemote(B, key, remote);
+      app.syncPending = false;
+      const b = await bundleForSync();
+      let r;
       try {
-        await saveNow();
-        clearTimeout(app.saveTimer); app.dirty = false;
-        await S.importBundle(b);
-      } finally { app.editor.setEditable(true); }
-      const p = await S.getProject(app.project.id);
-      p.syncedAt = remote.modifiedTime;
-      await S.putProject(p);
-      app.cur = null;
-      await openProject(p.id);
-      toast('다른 기기에서 고친 내용을 가져왔어요. 이 기기에서 쓰던 내용은 버전 기록에 남아 있습니다.', 6000);
+        r = await B.pushBundle(b, await S.gzip(JSON.stringify(b)), { baseTime: app.project[key] || '' });
+      } catch (e) {
+        // 받아 오는 사이 또 다른 기기가 올렸다: 한 번 더 받아서 맞춘다
+        if (e.conflict && round < 2) continue;
+        throw e;
+      }
+      pushedAt = Date.now();
+      app.project[key] = r.modifiedTime;
+      if (!server) { app.project.syncedSize = +r.size || 0; app.project.driveFileId = r.id; }
+      else app.project.srvSyncedSize = +r.size || 0;
+      await S.putProject(app.project);
+      break;
     }
-    app.syncPending = false;
-    const b = await bundleForSync();
-    const r = await G.pushBundle(b, await S.gzip(JSON.stringify(b)));
-    pushedAt = Date.now();
-    app.project.syncedAt = r.modifiedTime;
-    app.project.syncedSize = +r.size || 0;
-    app.project.driveFileId = r.id;
-    await S.putProject(app.project);
     setSyncState('ok', `☁ ${hm(Date.now())} 동기화`);
-    if (!quiet) toast('구글 드라이브에 저장했어요.');
+    if (!quiet) toast(server ? '동기화 서버에 저장했어요.' : '구글 드라이브에 저장했어요.');
   } catch (e) {
     app.syncPending = true;
     setSyncState('err', '☁ 동기화 안 됨');
@@ -880,10 +906,21 @@ export async function syncNow({ quiet = false } = {}) {
 }
 
 export function refreshSyncPill() {
+  const pill = $('#syncState');
+  const shown = () => /동기화 중|\d 동기화/.test(pill.textContent); // 방금 동기화한 시각은 그대로 둔다
+  if (usingServer()) {
+    const st = SV.status();
+    pill.title = '동기화 서버';
+    if (!st.configured) setSyncState('', '☁ 서버 연결하기');
+    else if (st.error) setSyncState('err', '☁ 동기화 안 됨');
+    else if (!shown()) setSyncState('ok', '☁ 서버 연결됨');
+    return;
+  }
   const st = G.status();
-  if (!st.configured) setSyncState('', '☁ 드라이브 꺼짐');
+  pill.title = '구글 드라이브';
+  if (!st.configured) setSyncState('', '☁ 동기화 꺼짐');
   else if (!st.connected) setSyncState('', '☁ 드라이브 연결하기');
-  else if (!$('#syncState').textContent.includes('동기화')) setSyncState('ok', '☁ 연결됨');
+  else if (!shown()) setSyncState('ok', '☁ 드라이브 연결됨');
 }
 
 export { STATUS };

@@ -3,6 +3,7 @@ import { DOMSerializer } from '@tiptap/pm/model';
 import { undoDepth, isHistoryTransaction } from '@tiptap/pm/history';
 import * as S from './store.js';
 import * as G from './gdrive.js';
+import * as SV from './syncserver.js';
 import { app, saveNow, openProject, openChapter, renderBinder, renderHistory, restoreSnapshot, isTabOpen } from './app.js';
 import { $, h, toast, toastAction, dialog, confirmDlg, hm, dayLabel, ago } from './ui.js';
 import { countHtml, fmt } from './stats.js';
@@ -95,6 +96,7 @@ export async function showRecovery() {
       <section class="rc"><h3>휴지통</h3>
         <p class="hint">지운 장과 작품은 버전 기록과 함께 30일 동안 여기 있어요.</p>
         <div class="rc-list">${trashRows || '<p class="hint">휴지통이 비어 있습니다.</p>'}</div></section>
+      ${SV.status().configured ? `<section class="rc"><h3>동기화 서버</h3><p class="hint">이 기기 기록이 모두 사라졌다면 서버에 올려 둔 작품을 다시 받아 올 수 있어요. 서버는 덮어쓰기 전 판도 몇 개 따로 남겨 둡니다.</p><div class="rc-btns"><button type="button" class="small" data-server="1">서버에서 불러오기</button></div></section>` : ''}
       ${G.status().connected ? `<section class="rc"><h3>구글 드라이브 백업</h3><p class="hint">이 기기 기록이 모두 사라졌다면 드라이브에 올려 둔 파일에서 작품을 다시 받아 올 수 있어요.</p><div class="rc-btns"><button type="button" class="small" data-drive="1">드라이브에서 불러오기</button></div></section>` : ''}`,
     buttons: [{ label: '닫기', value: 'close' }],
     onOpen: (f, dlg) => {
@@ -111,6 +113,7 @@ export async function showRecovery() {
           if (await confirmDlg('영구 삭제', '휴지통에서 완전히 지웁니다. 이건 되돌릴 수 없어요.', '영구 삭제', true)) { await S.dropTrash(d.drop); toast('지웠어요.'); }
           showRecovery();
         } else if (d.drive) { dlg.close('close'); const { driveImport } = await import('./features.js'); driveImport(); }
+        else if (d.server) { dlg.close('close'); const { serverImport } = await import('./features.js'); serverImport(); }
       });
     },
   });
