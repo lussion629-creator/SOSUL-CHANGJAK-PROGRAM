@@ -850,3 +850,15 @@ body.has-proof-rail.proof-right .paper-scroll { padding-right: 268px; }
 .proof-rule span { min-width: 0; }
 .proof-rule select { flex: none; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12.5px; }
 @media print { .proof-rail { display: none !important; } }
+.pf-card.pc-done { --pc: var(--ink3); border-left-style: dotted; background: var(--bg2); }
+.pf-card.pc-done .pc-k { color: var(--ink2); }
+.proof-done:empty { display: none; }
+.proof-done { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 10px; max-height: 26vh; overflow: auto; }
+.pd-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; font-size: 13px; position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+.pd-head b { margin-right: auto; font-weight: 600; }
+.pd-row { display: flex; gap: 10px; align-items: center; padding: 6px 12px; border-top: 1px dashed var(--line); }
+.pd-row:first-of-type { border-top: 0; }
+.pd-fix { font-family: var(--ed-font); font-size: 14px; }
+.pd-fix del { color: var(--del); text-decoration: line-through; }
+.pd-fix ins { color: var(--ins); text-decoration: none; font-weight: 600; }
+.pd-row .hint { margin-right: auto; }
