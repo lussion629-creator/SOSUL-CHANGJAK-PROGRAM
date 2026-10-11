@@ -485,11 +485,7 @@ export async function showSettings() {
       <label class="check"><input type="checkbox" name="indent" ${s.indent ? 'checked' : ''}> 문단 첫 줄 들여쓰기</label>
       </div>
       <div class="row2">
-        <label class="field"><span>화면 테마</span><select name="theme">
-          <option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>기기 설정 따르기</option>
-          <option value="light" ${s.theme === 'light' ? 'selected' : ''}>밝게</option>
-          <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>어둡게 (다크 모드)</option>
-          <option value="sepia" ${s.theme === 'sepia' ? 'selected' : ''}>종이색</option></select></label>
+        <div class="field"><span>화면 색</span><button type="button" class="small" data-colors="1">${{ auto: '기기 설정 따르기', light: '라이트', dark: '다크' }[s.theme] || h(s.bgColors.find((c) => c.color === s.bgColor)?.name || s.bgColor || '내 색')} · 바꾸기…</button></div>
         <label class="field"><span>자동 버전 간격 (분)</span><select name="snapshotMinutes">${[1, 3, 5, 10, 30].map((m) => `<option ${m === s.snapshotMinutes ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
       </div>
       <label class="check"><input type="checkbox" name="smartQuotes" ${s.smartQuotes ? 'checked' : ''}> 따옴표 자동 변환 (" → “ ”)</label>
@@ -498,6 +494,7 @@ export async function showSettings() {
       <p class="hint" style="margin:0">자동 저장: 손을 멈추고 5초 뒤 이 기기에 저장됩니다. 버전 기록은 위 간격마다 쌓이고, 3일이 지난 자동 버전은 1시간에 하나, 30일이 지나면 하루에 하나만 남깁니다(직접 저장한 버전은 그대로).</p>`,
     buttons: [{ label: '취소', value: 'close' }, { label: '저장', value: 'ok', primary: true }],
     onOpen: (f) => {
+      f.querySelector('[data-colors]')?.addEventListener('click', async () => { f.requestSubmit(f.querySelector('button[value=close]')); const { showColors } = await import('./themecolor.js'); setTimeout(showColors, 0); });
       f.follow.addEventListener('change', () => { f.querySelector('.fl-on').hidden = !f.follow.checked; f.querySelector('.fl-off').hidden = f.follow.checked; });
       f.querySelector('[data-ps]').addEventListener('click', (e) => { e.preventDefault(); f.requestSubmit(f.querySelector('.dlg-foot button[value=ok]')); setTimeout(() => showPageSetup(), 0); });
     },
@@ -513,7 +510,7 @@ export async function showSettings() {
   }
   Object.assign(s, {
     font: f.font.value, size: +f.size.value, lineHeight: +f.lineHeight.value, width: +f.width.value, paraSpacing: +f.paraSpacing.value,
-    theme: f.theme.value, snapshotMinutes: +f.snapshotMinutes.value, indent: f.indent.checked, smartQuotes: f.smartQuotes.checked,
+    snapshotMinutes: +f.snapshotMinutes.value, indent: f.indent.checked, smartQuotes: f.smartQuotes.checked,
     typewriter: f.typewriter.checked, dimFocus: f.dimFocus.checked,
   });
   saveSettings();

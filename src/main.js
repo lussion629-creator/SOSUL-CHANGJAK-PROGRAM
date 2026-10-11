@@ -24,6 +24,8 @@ import * as T from './tools.js';
 import * as R from './reader.js';
 import * as PF from './proof.js';
 import { showAiSettings } from './ai.js';
+import { toggleHelp, bindHelp } from './help.js';
+import { showColors } from './themecolor.js';
 const ACTIONS = {
   checkUpdate: () => window.desktop?.checkUpdate?.(),
   readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
@@ -42,7 +44,7 @@ const ACTIONS = {
   bookPlain: () => { closeRevision(); toggleBook(!(isBookOpen() && app.settings.bookNoCh), { noCh: true }); },
   bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
   lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1), lsReset: () => setSpacing(null), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
-  drive: F.showDrive, driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport, storage: () => F.showStorage(),
+  drive: F.showDrive, driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport, storage: () => F.showStorage(), colors: () => showColors(), help: () => toggleHelp(),
   renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
   addChapter: () => addChapter(), addNote: () => F.editNote(null),
 };
@@ -84,6 +86,7 @@ async function boot() {
   bindTextColor();
   R.bindReader();
   PF.bindProof();
+  bindHelp();
   T.bindTidyMarks();
   T.bindChapterGoal();
   A.bindAnnotations({ onNotesChange: () => { if (isTabOpen('notes')) F.renderNotes(); } });
@@ -236,6 +239,7 @@ function bind() {
     speak: () => ACTIONS.speak(), sprint: () => ACTIONS.sprint(), index: () => A.showIndex(), keys: () => showKeys(),
     tidy: () => T.showTidy(), tidyMark: () => T.toggleTidyMark(), appear: () => T.showAppearances(), split: () => T.splitChapterAtCursor(),
     readAloud: () => R.readAloud(), readNext: () => R.skip(1), readPrev: () => R.skip(-1), readStop: () => R.stop(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
+    help: () => toggleHelp(), colors: () => showColors(), storage: () => F.showStorage(), server: () => F.showServer(),
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {

@@ -2,6 +2,7 @@
 import * as S from './store.js';
 import * as G from './gdrive.js';
 import * as SV from './syncserver.js';
+import { applyTheme, migrateTheme } from './themecolor.js';
 import { createEditor, activeState, docParagraphs } from './editor.js';
 import { EditorState } from '@tiptap/pm/state';
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
@@ -14,7 +15,7 @@ import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, pr
 
 const DEFAULTS = {
   font: "'Gowun Batang', 'Nanum Myeongjo', Batang, serif", size: 17, lineHeight: 1.9, width: 720,
-  indent: true, paraSpacing: 0, theme: 'auto', smartQuotes: true, typewriter: false, dimFocus: true,
+  indent: true, paraSpacing: 0, theme: 'auto', bgColor: '', bgColors: [], smartQuotes: true, typewriter: false, dimFocus: true,
   snapshotMinutes: 3, autoSaveSeconds: 5, driveClientId: '', syncTarget: 'drive', syncAsked: false, syncServer: '', autoSync: true, syncMinutes: 5, author: '',
 };
 
@@ -37,6 +38,7 @@ export function loadSettings() {
   try { Object.assign(app.settings, JSON.parse(localStorage.getItem('nw-settings') || '{}')); } catch { /* 무시 */ }
   // 1.0.4: 복사·붙여넣기는 쓴·지운 양에서 빼는 것으로 한 번 되돌린다 (그 뒤로는 '오늘 쓴 양'에서 고른 대로)
   if (!app.settings.clipV) { app.settings.countPaste = false; app.settings.clipV = 1; }
+  migrateTheme(app.settings);
   applySettings();
 }
 export function saveSettings() {
@@ -70,8 +72,7 @@ export function applySettings() {
     r.setProperty('--ed-para', s.paraSpacing + 'em');
     for (const k of ['--ed-ls', '--ed-align', '--ed-break', '--pv-z']) r.removeProperty(k);
   }
-  if (s.theme === 'auto') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = s.theme;
+  applyTheme(s);
   document.body.classList.toggle('dim', !!s.dimFocus);
 }
 export function toggleTheme() {

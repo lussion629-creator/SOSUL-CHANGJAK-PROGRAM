@@ -44,6 +44,7 @@ export const COMMANDS = [
   { id: 'bookPlain', label: '장 없이 전체 보기', key: '', group: '보기' },
   { id: 'revision', label: '퇴고 모드', key: '', group: '보기' },
   { id: 'theme', label: '다크 모드 전환', key: '', group: '보기' },
+  { id: 'colors', label: '화면 색 (라이트·다크·내 색)', key: '', group: '보기' },
   { id: 'addChapter', label: '새 장', key: '', group: '장' },
   { id: 'split', label: '커서 자리에서 장 나누기', key: '', group: '장' },
   { id: 'prevChapter', label: '앞 장으로', key: 'Ctrl+Alt+ArrowUp', group: '장' },
@@ -64,6 +65,7 @@ export const COMMANDS = [
   { id: 'tidyMark', label: '원고 다듬기 표시 켜기/끄기', key: '', group: '도구' },
   { id: 'appear', label: '인물 등장 지도', key: '', group: '도구' },
   { id: 'keys', label: '단축키 설정 창', key: '', group: '도구' },
+  { id: 'help', label: '도움말 열기/닫기', key: 'F1', group: '도구' },
 ];
 const BY_ID = new Map(COMMANDS.map((c) => [c.id, c]));
 // 브라우저·운영체제가 쓰는 키: 바꿀 수는 있지만 알려 준다
