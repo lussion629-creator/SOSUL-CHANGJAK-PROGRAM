@@ -164,3 +164,113 @@ export async function readHwpxLayout(arrayBuffer) {
   return L;
 }
 const r1 = (v) => Math.round(v * 10) / 10;
+
+// ---------- Word(.docx) 파일에서 쪽 설정 읽기 ----------
+// 길이 단위: twip(1/1440인치). Word의 위·아래 여백은 '종이 끝 ~ 본문'이고 머리말·꼬리말 거리는 '종이 끝 ~ 머리말·꼬리말'이라
+// 여기서는 머리말 거리 = 위 여백(mt), 그 나머지 = 머리말 칸(mh), 꼬리말 거리 = 아래 여백(mb, 쪽 번호 자리), 나머지 = 꼬리말 칸(mf)으로 옮긴다.
+const TW = 1440 / 25.4; // twip per mm
+export async function readDocxLayout(arrayBuffer) {
+  const { default: JSZip } = await import('jszip');
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const xml = async (name) => { const f = zip.file(name); return f ? new DOMParser().parseFromString(await f.async('string'), 'application/xml') : null; };
+  const doc = await xml('word/document.xml');
+  if (!doc) throw new Error('Word(docx) 문서가 아니거나 본문을 찾지 못했습니다.');
+  const styles = await xml('word/styles.xml');
+  const settings = await xml('word/settings.xml');
+  const theme = await xml('word/theme/theme1.xml');
+  const W = (el, name) => (el ? [...el.getElementsByTagNameNS('*', name)] : []);
+  const one = (el, name) => W(el, name)[0] || null;
+  const kid = (el, name) => (el ? [...el.children].find((c) => c.localName === name) || null : null);
+  const at = (el, name) => (el ? el.getAttributeNS('http://schemas.openxmlformats.org/wordprocessingml/2006/main', name) ?? el.getAttribute('w:' + name) : null);
+  const num = (el, name) => { const v = at(el, name); return v == null || v === '' ? null : +v; };
+  const L = { ...BASE };
+
+  // 용지·여백: 본문 끝의 구역 설정(없으면 첫 구역)
+  const body = one(doc, 'body');
+  const sect = kid(body, 'sectPr') || one(doc, 'sectPr');
+  const sz = kid(sect, 'pgSz'), mar = kid(sect, 'pgMar');
+  if (sz) {
+    let w = num(sz, 'w') / TW, hh = num(sz, 'h') / TW;
+    if (at(sz, 'orient') === 'landscape' && w < hh) [w, hh] = [hh, w];
+    if (w && hh) { L.w = r1(w); L.h = r1(hh); }
+  }
+  if (mar) {
+    const g = (a) => Math.max(0, (num(mar, a) || 0) / TW);
+    const top = g('top'), bottom = g('bottom'), head = g('header'), foot = g('footer'), gut = g('gutter');
+    L.mt = r1(Math.min(head || top, top)); L.mh = r1(Math.max(0, top - L.mt));
+    L.mb = r1(Math.min(foot || bottom, bottom)); L.mf = r1(Math.max(0, bottom - L.mb));
+    L.ml = r1(g('left') + gut); L.mr = r1(g('right'));
+  }
+  L.mirror = !!one(settings, 'mirrorMargins');
+  const pnt = kid(sect, 'pgNumType');
+  if (num(pnt, 'start')) L.numStart = num(pnt, 'start');
+
+  // 쪽 번호: 꼬리말(없으면 머리말)에 PAGE 필드가 있는지, 그 문단을 어떻게 맞췄는지
+  L.num = 'none';
+  const rels = await xml('word/_rels/document.xml.rels');
+  const target = (id) => [...(rels?.getElementsByTagName('Relationship') || [])].find((r) => r.getAttribute('Id') === id)?.getAttribute('Target');
+  const refs = [...W(sect, 'footerReference'), ...W(sect, 'headerReference')];
+  for (const ref of refs) {
+    const t = target(ref.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id') || ref.getAttribute('r:id'));
+    const part = t && (await xml('word/' + t.replace(/^\/?word\//, '')));
+    const p = W(part, 'p').find((x) => W(x, 'instrText').some((i) => /\bPAGE\b/.test(i.textContent)) || W(x, 'fldSimple').some((f) => /\bPAGE\b/.test(at(f, 'instr') || '')));
+    if (!p) continue;
+    const jc = at(one(p, 'jc'), 'val') || 'left';
+    const even = refs.some((r) => at(r, 'type') === 'even');
+    L.num = even && L.mirror ? 'outside' : /center/.test(jc) ? 'center' : /right|end/.test(jc) ? 'right' : 'left';
+    break;
+  }
+
+  // 글자·문단: 본문에서 가장 많이 쓴 문단 스타일을 기준으로, 기본값 → 스타일(기반 스타일 포함) → 문단에 직접 준 값 순서로 덮는다
+  const styleEls = W(styles, 'style');
+  const styleById = (id) => styleEls.find((s) => at(s, 'styleId') === id);
+  const defStyle = styleEls.find((s) => at(s, 'type') === 'paragraph' && /^(1|true)$/.test(at(s, 'default') || ''));
+  const count = new Map(), sizes = new Map();
+  for (const p of W(body, 'p')) {
+    const len = W(p, 't').reduce((a, t) => a + t.textContent.length, 0);
+    if (!len) continue;
+    const id = at(one(kid(p, 'pPr'), 'pStyle'), 'val') || at(defStyle, 'styleId') || '';
+    count.set(id, (count.get(id) || 0) + len);
+    for (const r of W(p, 'r')) {
+      const v = num(one(kid(r, 'rPr'), 'sz'), 'val');
+      if (v) sizes.set(v, (sizes.get(v) || 0) + W(r, 't').reduce((a, t) => a + t.textContent.length, 0));
+    }
+  }
+  const topKey = (m) => [...m].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const chain = [];
+  for (let s = styleById(topKey(count)) || defStyle, n = 0; s && n < 10; s = styleById(at(one(s, 'basedOn'), 'val')), n++) chain.unshift(s);
+  const dflt = one(styles, 'docDefaults');
+  const rLayers = [one(one(dflt, 'rPrDefault'), 'rPr'), ...chain.map((s) => kid(s, 'rPr'))].filter(Boolean);
+  const pLayers = [one(one(dflt, 'pPrDefault'), 'pPr'), ...chain.map((s) => kid(s, 'pPr'))].filter(Boolean);
+  const last = (layers, name) => layers.map((l) => kid(l, name)).filter(Boolean).pop() || null;
+
+  const szv = num(last(rLayers, 'sz'), 'val');
+  const direct = topKey(sizes);
+  L.size = (direct && sizes.get(direct) > 0 ? direct : szv || 21) / 2; // 반 포인트 단위
+  const spc = num(last(rLayers, 'spacing'), 'val'); // 1/20pt
+  L.spacing = spc ? Math.round((spc / 20 / L.size) * 100) : 0;
+  const rf = last(rLayers, 'rFonts');
+  let face = at(rf, 'eastAsia') || at(rf, 'ascii') || at(rf, 'hAnsi');
+  const themeKey = at(rf, 'eastAsiaTheme') || at(rf, 'asciiTheme');
+  if (!face && themeKey && theme) {
+    const fs = one(theme, /^major/.test(themeKey) ? 'majorFont' : 'minorFont');
+    face = [...(fs?.children || [])].find((c) => c.localName === 'font' && c.getAttribute('script') === 'Hang')?.getAttribute('typeface')
+      || one(fs, /EastAsia/.test(themeKey) ? 'ea' : 'latin')?.getAttribute('typeface') || '';
+  }
+  if (face) L.font = cssFont(face);
+
+  const jc = at(last(pLayers, 'jc'), 'val');
+  L.align = /^(left|start)$/.test(jc || '') ? 'left' : 'justify';
+  const ww = last(pLayers, 'wordWrap');
+  L.breakWord = ww && /^(0|false|off)$/.test(at(ww, 'val') || '') ? 'char' : 'word';
+  const sp = last(pLayers, 'spacing');
+  const rule = at(sp, 'lineRule') || 'auto', line = num(sp, 'line');
+  // Word의 '한 줄'(240)은 글자 높이의 약 1.2배로 본다
+  if (line) L.line = Math.round(rule === 'auto' ? (line / 240) * 120 : (line / 20 / L.size) * 100);
+  const after = num(sp, 'after'), afterLines = num(sp, 'afterLines');
+  L.paraAfter = r1(afterLines != null ? (afterLines / 100) * L.size * (L.line / 100) : (after || 0) / 20);
+  const ind = last(pLayers, 'ind');
+  const flc = num(ind, 'firstLineChars'), fl = num(ind, 'firstLine');
+  L.indent = Math.max(0, r1(flc != null ? flc / 100 : fl ? fl / 20 / L.size : 0));
+  return L;
+}

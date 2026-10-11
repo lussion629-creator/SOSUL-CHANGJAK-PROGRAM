@@ -372,20 +372,21 @@ export async function showAnalyze() {
     const rep = repeatedWords(text, 40);
     const hab = habitWords(text);
     const longs = longSentences(text, 120).slice(0, 15);
-    return `<div class="statgrid">
+    const words = (list) => list.map(([w, n]) => `<button type="button" data-word="${h(w)}"><span>${h(w)}</span><b>${n}</b></button>`).join('') || '<p class="ana-none">없어요.</p>';
+    return `<div class="statgrid ana-stats">
         <div class="stat"><b>${fmt(sents.length)}</b><span>문장</span></div>
         <div class="stat"><b>${avg}자</b><span>평균 문장 길이</span></div>
         <div class="stat"><b>${dialogueRatio(text)}%</b><span>대사 비율</span></div>
         <div class="stat"><b>${longs.length}</b><span>120자 넘는 문장</span></div>
       </div>
-      <div><b>자주 쓴 낱말</b> <span class="hint">누르면 이 장에서 위치를 표시합니다</span><div class="wordtable" style="margin-top:6px">${rep.map(([w, n]) => `<button type="button" data-word="${h(w)}">${h(w)}<b>${n}</b></button>`).join('') || '<span class="hint">없음</span>'}</div></div>
-      <div><b>습관처럼 쓰는 말</b> <span class="hint">부사·접속어·‘것이다’ 같은 표현</span><div class="wordtable" style="margin-top:6px">${hab.map(([w, n]) => `<button type="button" data-word="${h(w)}">${h(w)}<b>${n}</b></button>`).join('') || '<span class="hint">없음</span>'}</div></div>
-      <div><b>긴 문장</b><div class="longs" style="margin-top:6px">${longs.map((s) => `<div data-sent="${h(s.slice(0, 30))}"><small>${s.length}자</small> ${h(s)}</div>`).join('') || '<span class="hint">없음</span>'}</div></div>`;
+      <section class="ana-sec"><header><h3>자주 쓴 낱말</h3><p>누르면 이 장에서 나온 자리를 모두 표시해요.</p></header><div class="wordtable">${words(rep)}</div></section>
+      <section class="ana-sec"><header><h3>습관처럼 쓰는 말</h3><p>부사·접속어, ‘것이다’ 같은 표현이에요.</p></header><div class="wordtable">${words(hab)}</div></section>
+      <section class="ana-sec"><header><h3>긴 문장</h3><p>120자 넘는 문장을 15개까지 보여 줘요. 누르면 그 문장으로 가요.</p></header><ol class="longs">${longs.map((s) => `<li data-sent="${h(s.slice(0, 30))}" tabindex="0"><span class="len">${s.length}자</span><span class="tx">${h(s)}</span></li>`).join('') || '<p class="ana-none">없어요.</p>'}</ol></section>`;
   };
   await dialog({
     title: '퇴고 도우미',
     wide: true,
-    body: `<div class="seg" style="justify-self:start"><button type="button" data-scope="cur" class="on">이 장</button><button type="button" data-scope="all">작품 전체</button></div><div id="anaBody">${build()}</div>`,
+    body: `<div class="ana"><div class="seg seg-lg" style="justify-self:start"><button type="button" data-scope="cur" class="on">이 장</button><button type="button" data-scope="all">작품 전체</button></div><div id="anaBody" class="ana-body">${build()}</div></div>`,
     buttons: [{ label: '표시 지우기', value: 'clear' }, { label: '닫기', value: 'close', primary: true }],
     onOpen: (f, dlg) => {
       f.addEventListener('click', (e) => {

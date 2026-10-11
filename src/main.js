@@ -21,9 +21,11 @@ import * as A from './annotate.js';
 import { bindKeys, showKeys } from './keys.js';
 import * as T from './tools.js';
 import * as R from './reader.js';
+import * as PF from './proof.js';
 const ACTIONS = {
   checkUpdate: () => window.desktop?.checkUpdate?.(),
-  readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(),
+  readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
+  proof: () => PF.toggleProof(), proofList: () => PF.showProof(),
   annotate: () => A.addAnnotation(), index: () => A.showIndex(), keys: () => showKeys(), tidy: () => T.showTidy(), appear: () => T.showAppearances(),
   annoSide: () => { const nx = { right: 'left', left: 'off', off: 'right' }[app.settings.annoSide || 'right']; A.setAnnoSide(nx); toast({ right: '주석을 오른쪽 여백에 보여 줘요.', left: '주석을 왼쪽 여백에 보여 줘요.', off: '여백 주석을 숨겼어요. 주석 글자를 누르면 볼 수 있어요.' }[nx]); },
   annoSticky: () => { const on = !app.settings.annoSticky; A.setAnnoSticky(on); toast(on ? '주석을 포스트잇으로 붙여 보여 줘요. 끌어서 옮기고, 두 번 누르면 고쳐요.' : '주석 포스트잇을 뗐어요.'); },
@@ -34,7 +36,8 @@ const ACTIONS = {
   find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, today: () => showToday(), clips: () => showClips(), sprint: F.showSprint, snapshot: manualSnapshot,
   pageView: () => togglePageView(), pageSetup: showPageSetup, fontDlg: () => showFontDialog(), paraDlg: () => showParaDialog(),
   recover: () => showRecovery(),
-  book: () => { closeRevision(); toggleBook(); },
+  book: () => { closeRevision(); toggleBook(undefined, isBookOpen() ? {} : { noCh: false }); },
+  bookPlain: () => { closeRevision(); toggleBook(!(isBookOpen() && app.settings.bookNoCh), { noCh: true }); },
   bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
   lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1), lsReset: () => setSpacing(null), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
   drive: F.showDrive, driveImport: F.driveImport,
@@ -76,6 +79,7 @@ async function boot() {
   bindHighlight();
   bindTextColor();
   R.bindReader();
+  PF.bindProof();
   T.bindChapterGoal();
   A.bindAnnotations({ onNotesChange: () => { if (isTabOpen('notes')) F.renderNotes(); } });
   bindSafety();
@@ -212,6 +216,7 @@ function bind() {
     print: () => ACTIONS.print(),
     undo: () => runCommand(app.editor, 'undo'), redo: () => runCommand(app.editor, 'redo'),
     find: () => F.openFind(), replace: () => { F.openFind(); $('#replaceInput').focus(); },
+    proof: () => PF.toggleProof(), proofList: () => PF.showProof(),
     annotate: () => A.addAnnotation(), annoSticky: () => ACTIONS.annoSticky(), scene: () => runCommand(app.editor, 'scene'), snapshot: () => manualSnapshot(),
     bold: () => runCommand(app.editor, 'bold'), italic: () => runCommand(app.editor, 'italic'), underline: () => runCommand(app.editor, 'underline'),
     strike: () => runCommand(app.editor, 'strike'), highlight: () => runCommand(app.editor, 'highlight'), clear: () => runCommand(app.editor, 'clear'),
@@ -219,11 +224,11 @@ function bind() {
     bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5), lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1),
     left: () => runCommand(app.editor, 'left'), center: () => runCommand(app.editor, 'center'), right: () => runCommand(app.editor, 'right'), justify: () => runCommand(app.editor, 'justify'),
     pageSetup: () => showPageSetup(), focus: () => F.toggleFocus(), sidebar: () => toggleSidebar(),
-    pageView: () => ACTIONS.pageView(), book: () => ACTIONS.book(), revision: () => ACTIONS.revision(), theme: () => toggleTheme(),
+    pageView: () => ACTIONS.pageView(), book: () => ACTIONS.book(), bookPlain: () => ACTIONS.bookPlain(), revision: () => ACTIONS.revision(), theme: () => toggleTheme(),
     addChapter: () => addChapter(), prevChapter: () => chapterStep(-1), nextChapter: () => chapterStep(1),
     speak: () => ACTIONS.speak(), sprint: () => ACTIONS.sprint(), index: () => A.showIndex(), keys: () => showKeys(),
     tidy: () => T.showTidy(), appear: () => T.showAppearances(), split: () => T.splitChapterAtCursor(),
-    readAloud: () => R.readAloud(), readNext: () => R.skip(1), readPrev: () => R.skip(-1), readStop: () => R.stop(), readSettings: () => R.showReaderSettings(),
+    readAloud: () => R.readAloud(), readNext: () => R.skip(1), readPrev: () => R.skip(-1), readStop: () => R.stop(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {

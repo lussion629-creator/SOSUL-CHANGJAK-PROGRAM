@@ -1,7 +1,7 @@
 // 쪽 설정 창: 용지·여백·쪽 번호·글자·문단을 정하고, 템플릿으로 저장하거나 불러온다
 import {
   FONTS, PAPERS, KEYS, templates, templateById, defaultTemplateId, setDefaultTemplate, saveTemplate, deleteTemplate,
-  layoutOf, setProjectLayout, bodyBox, linesPerPage, readHwpxLayout,
+  layoutOf, setProjectLayout, bodyBox, linesPerPage, readHwpxLayout, readDocxLayout,
 } from './layout.js';
 import { applyPageView, isPageView, togglePageView } from './pageview.js';
 import { $, h, toast, dialog } from './ui.js';
@@ -25,7 +25,7 @@ function form(L) {
           <input name="tplName" placeholder="새 템플릿 이름 (예: 공모전 A4)">
           <button type="button" class="small" data-ps="save">지금 설정을 템플릿으로 저장</button>
         </div>
-        <div class="ps-row"><button type="button" class="small" data-ps="hwpx">한글(hwpx) 파일에서 쪽 설정 가져오기…</button></div>
+        <div class="ps-row"><button type="button" class="small" data-ps="hwpx">한글(hwpx) 파일에서 쪽 설정 가져오기…</button><button type="button" class="small" data-ps="docx">Word(docx) 파일에서 가져오기…</button></div>
       </fieldset>
       <fieldset><legend>용지</legend>
         <div class="ps-grid3">
@@ -168,6 +168,16 @@ export async function showPageSetup() {
           tplSel = nt;
           f.tplName.value = '';
           toast(`“${name}” 템플릿으로 저장했어요.`);
+        }
+        if (b.dataset.ps === 'docx') {
+          const file = await pick('.docx,.dotx,.docm');
+          if (!file) return;
+          try {
+            const got = await readDocxLayout(await file.arrayBuffer());
+            fill(f, got); tplSel = null; preview(f);
+            f.tplName.value = file.name.replace(/\.(docx|dotx|docm)$/i, '');
+            toast('Word 파일의 쪽 설정(용지·여백·쪽 번호·글자·문단)을 가져왔어요. 템플릿으로 저장하거나 이 작품에 적용하세요.', 5000);
+          } catch (err) { toast('가져오지 못했습니다: ' + err.message, 5000); }
         }
         if (b.dataset.ps === 'hwpx') {
           const file = await pick('.hwpx');

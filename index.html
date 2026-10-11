@@ -45,9 +45,10 @@
         <button data-act="pageView">쪽 보기 켜기/끄기 <small>용지 모양대로 한 쪽씩</small></button>
         <button data-act="focus">집중 모드</button>
         <button data-act="book">장 이어서 전체 보기 <small>모든 장을 한 번에</small></button>
+        <button data-act="bookPlain">장 없이 전체 보기 <small>장 제목 없이 한 번에</small></button>
         <button data-act="cork">코르크보드 (장 카드)</button>
         <button data-act="annoSide">주석 여백 위치 <small>오른쪽·왼쪽·숨김</small></button>
-        <button data-act="annoSticky">주석 포스트잇 켜기/끄기 <small data-kbd="annoSticky" data-kbd-prefix="원고 옆에 쪽지처럼">원고 옆에 쪽지처럼, Ctrl+Alt+P</small></button>
+        <button data-act="annoSticky">주석 포스트잇 켜기/끄기 <small data-kbd="annoSticky" data-kbd-prefix="원고 옆 쪽지">원고 옆 쪽지, Ctrl+Alt+P</small></button>
         <hr>
         <button data-act="theme">다크 모드 전환</button>
         <button data-act="settings">글꼴·화면 설정</button>
@@ -74,13 +75,15 @@
       <div class="menu" id="menu-edit">
         <p class="menu-cap">찾기·고치기</p>
         <button data-act="find">찾기 / 바꾸기 <small data-kbd="find">Ctrl+F</small></button>
+        <button data-act="proof">맞춤법·문장부호 교정 켜기/끄기 <small data-kbd="proof" data-kbd-prefix="물결 밑줄로 표시">물결 밑줄로 표시, Ctrl+Alt+K</small></button>
+        <button data-act="proofList">교정 목록·AI 검사 <small>틀린 곳 모아 한 번에 고치기</small></button>
         <button data-act="tidy">원고 다듬기 <small>문장부호·띄어쓰기 정리</small></button>
         <button data-act="analyze">퇴고 도우미 <small>반복어·긴 문장</small></button>
         <button data-act="revision">퇴고 모드 <small>이전 버전과 나란히 비교</small></button>
         <hr>
         <p class="menu-cap">주석·자료</p>
         <button data-act="annotate">주석 달기 <small data-kbd="annotate" data-kbd-prefix="색인·교정 제안·인용·의도">색인·교정 제안·인용·의도, Ctrl+Alt+M</small></button>
-        <button data-act="annoSticky">주석 포스트잇 켜기/끄기 <small>원고 옆에 쪽지처럼</small></button>
+        <button data-act="annoSticky">주석 포스트잇 켜기/끄기 <small>원고 옆 쪽지</small></button>
         <button data-act="index">찾아보기 <small>색인 목록</small></button>
         <button data-act="appear">인물 등장 지도 <small>장마다 몇 번 나오나</small></button>
       </div>
@@ -93,6 +96,7 @@
         <button data-act="speak">이 문단만 기기 목소리로 <small>Esc로 멈춤</small></button>
         <hr>
         <button data-act="readExport">음성 파일로 저장 <small>WAV · 장·작품 전체</small></button>
+        <button data-act="readCast">등장인물 목소리 <small>인물마다 다른 목소리 · AI 판정</small></button>
         <button data-act="readSettings">낭독 설정 <small>Gemini 키·목소리·빠르기</small></button>
       </div>
     </div>
@@ -310,6 +314,8 @@
       <div class="cork book" id="bookView" hidden>
         <div class="rev-bar"><strong>전체 이어 보기</strong><span class="hint" id="bookStat"></span>
           <div class="seg"><button data-book="flow" class="on">글만</button><button data-book="page">쪽 모양</button></div>
+          <label class="switch"><input type="checkbox" id="bookNoCh"><span></span>장 구분 없이</label>
+          <label class="switch" id="bookChPageWrap" hidden><input type="checkbox" id="bookChPage" checked><span></span>장마다 새 쪽</label>
           <select id="bookToc" class="small" aria-label="차례"></select>
           <button class="small" data-act="book">닫기</button></div>
         <div class="book-body" id="bookBody"></div>
@@ -330,6 +336,7 @@
     <span id="stTotal" title="작품 전체"></span>
     <span id="stSel" class="st-sel" hidden></span>
     <span id="pvZoom" hidden><span id="pvStat" title="이 장의 쪽 수"></span> <select class="pvzoom" id="pvZoomSel" title="쪽 보기 배율"><option value="fit">폭 맞춤</option><option value="50">50%</option><option value="75">75%</option><option value="100">100%</option><option value="125">125%</option><option value="150">150%</option></select></span>
+    <button class="st-proof" id="stProof" hidden></button>
     <button class="today" id="stToday" data-act="today" title="오늘 쓴 양: 붙여넣기 뺀 양·포함한 양, 초기화"></button>
     <span class="goal" id="stGoal" data-act="goals" title="오늘 목표"><span class="bar"><i id="goalBar"></i></span><span id="goalText"></span></span>
     <span id="stSprint" hidden></span>

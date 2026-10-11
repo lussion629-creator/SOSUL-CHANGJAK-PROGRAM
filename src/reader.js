@@ -1,7 +1,8 @@
 // AI 낭독: Gemini 음성 모델(또는 기기 목소리)로 원고를 읽어 준다.
 // 원고를 문단 단위로 묶어 조각으로 나누고, 지금 조각을 읽는 동안 다음 조각을 미리 만들어 끊김 없이 이어 읽는다.
 // API 키는 이 기기에만 저장한다 (백업 파일·드라이브 동기화·설정에 들어가지 않는다).
-import { app, saveSettings, openChapter } from './app.js';
+import { app, saveSettings, openChapter, htmlParagraphs } from './app.js';
+import * as S from './store.js';
 import { $, h, toast, dialog } from './ui.js';
 import { download } from './io/index.js';
 import { openDB } from 'idb';
@@ -43,6 +44,7 @@ const DEF = {
   engine: 'gemini', model: 'gemini-3.8-flash-tts', voice: 'Sulafat', voice2: '', styleId: 'audiobook', style: STYLES[0][2],
   style2: '인물의 감정을 살려 자연스럽게 연기하듯', rate: 1, chunk: 700, prefetch: 2, follow: true, nextChapter: true,
   cache: true, breakPause: 1.2, gap: 0.35, spc: 0.2, usage: null,
+  cast: false, castModel: 'gemini-flash-latest',
 };
 // 같은 객체를 돌려준다 (설정 창이 고친 값이 그대로 저장되도록). 새 항목이 생기면 기본값으로 채운다
 export function cfg() {
@@ -153,12 +155,13 @@ const legacy = (model) => (route.has(model) ? route.get(model) : /^gemini-2\./.t
 
 // 해설과 대사(따옴표 안)를 나눈다 → 두 목소리로 읽을 때
 const QUOTE = /“[^”]*”|"[^"\n]*"|「[^」]*」|『[^』]*』|‘[^’]*’/g;
-export function splitVoices(text) {
+// apart: 이어진 대사도 하나씩 따로 둔다 (인물마다 목소리를 나눌 때 — 말한 사람이 다를 수 있다)
+export function splitVoices(text, apart = false) {
   const segs = [];
   const push = (who, t) => {
     if (!t.trim()) { if (segs.length) segs[segs.length - 1].text += t; return; }
     const last = segs[segs.length - 1];
-    if (last && last.who === who) last.text += t; else segs.push({ who, text: t });
+    if (last && last.who === who && !(apart && who === 'C')) last.text += t; else segs.push({ who, text: t });
   };
   for (const para of text.split('\n')) {
     let i = 0;
@@ -257,8 +260,8 @@ const sleep = (ms, signal) => new Promise((res, rej) => {
   signal?.addEventListener('abort', () => { clearTimeout(t); rej(new DOMException('멈춤', 'AbortError')); }, { once: true });
 });
 
-async function callOnce(text, c, useLegacy, key, signal) {
-  const { url, body } = requestFor(text, c, useLegacy);
+async function callOnce(req, key, signal) {
+  const { url, body } = req;
   let res;
   try {
     // 키는 주소(URL)가 아니라 머리글로 보낸다 (주소는 기록에 남기 쉽다)
@@ -282,18 +285,22 @@ async function callOnce(text, c, useLegacy, key, signal) {
 }
 
 // 글 한 조각 → { wav(Uint8Array), secs, cached }
-export async function synth(text, { signal, onWait, c = cfg(), key = getKey() } = {}) {
-  if (!key) throw new TtsError('Gemini API 키를 먼저 넣어 주세요.', { fatal: true, status: -1 });
+export function synth(text, { signal, onWait, c = cfg(), key = getKey() } = {}) {
   const parts = [c.model, c.voice, c.voice2 || '', c.style || '', c.voice2 ? c.style2 || '' : '', text];
+  return runSynth(parts, (L) => requestFor(text, c, L), { signal, onWait, c, key, chars: nchars(text) });
+}
+// 요청 하나를 보내 음성을 받는다: 저장해 둔 음성 확인 → 보내기 → 실패하면 기다렸다 다시
+async function runSynth(parts, mk, { signal, onWait, c, key, chars }) {
+  if (!key) throw new TtsError('Gemini API 키를 먼저 넣어 주세요.', { fatal: true, status: -1 });
   const k = c.cache ? await cacheKey(parts) : null;
   if (k) { const hit = await cacheGet(k); if (hit) return { wav: new Uint8Array(hit.wav), secs: hit.secs, rate: hit.rate || RATE, cached: true }; }
   let tries = 0, switched = false;
   for (;;) {
     try {
-      const { pcm, rate } = await callOnce(text, c, legacy(c.model), key, signal);
+      const { pcm, rate } = await callOnce(mk(legacy(c.model)), key, signal);
       const secs = pcm.length / 2 / rate;
       const wav = toWav(pcm, rate);
-      addUsage(nchars(text), secs);
+      addUsage(chars, secs);
       if (k) cachePut(k, { parts, wav: wav.buffer, secs, rate });
       return { wav, secs, rate, cached: false };
     } catch (e) {
@@ -310,6 +317,193 @@ export async function synth(text, { signal, onWait, c = cfg(), key = getKey() } 
       await sleep(wait, signal);
     }
   }
+}
+
+// ---------- 인물마다 다른 목소리 ----------
+// AI(글 모델)가 대사마다 누가 말했는지 판정하고, 인물마다 정한 목소리로 읽는다.
+// 등장인물 목록은 작품에 저장한다 (백업·동기화에 함께). 해설은 '해설 목소리', 누군지 모르는 대사는 '대사 목소리'.
+export const MAX_CAST = VOICES.length - 1; // 목소리 30개 중 해설 하나를 뺀 만큼
+export const castOf = (p = app.project) => (p.cast ||= { chars: [] });
+const norm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+export function charOf(name, cast = castOf()) {
+  const n = norm(name);
+  if (!n) return null;
+  return cast.chars.find((x) => norm(x.name) === n || String(x.alias || '').split(/[,，、]/).some((a) => norm(a) && norm(a) === n)) || null;
+}
+// 아직 안 쓴 목소리를 성별에 맞춰 고른다
+export function autoVoice(gender, cast = castOf(), c = cfg()) {
+  const used = new Set([c.voice, ...cast.chars.map((x) => x.voice)]);
+  const pool = VOICES.filter((v) => !used.has(v[0]));
+  const pick = pool.find((v) => !gender || gender === '모름' || v[2] === gender) || pool[0];
+  return pick ? pick[0] : VOICES[(cast.chars.length + 1) % VOICES.length][0];
+}
+let castSaveT;
+const saveCast = () => { clearTimeout(castSaveT); castSaveT = setTimeout(() => S.putProject(app.project).catch(() => {}), 400); };
+const NOBODY = /^(내레이션|해설|서술|내레이터|narrator|모름|알수없음|unknown|none|)$/i;
+
+export async function askText(prompt, schema, { key, c, signal }) {
+  let res;
+  try {
+    res = await fetch(`${API}/models/${encodeURIComponent(c.castModel || DEF.castModel)}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, signal, referrerPolicy: 'no-referrer',
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: schema } }),
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    throw new TtsError('구글 서버에 연결하지 못했어요.', { retry: 0 });
+  }
+  let json = null;
+  try { json = await res.json(); } catch { /* 빈 응답 */ }
+  if (!res.ok) {
+    const e = explain(res.status, json);
+    if (res.status === 404) e.message = `판정 모델 ‘${c.castModel}’을 찾을 수 없어요. 등장인물 목소리 창에서 다른 모델을 적어 주세요.`;
+    throw e;
+  }
+  const t = json?.candidates?.[0]?.content?.parts?.map((x) => x.text || '').join('') || '';
+  try { return JSON.parse(t); } catch { throw new TtsError('AI 판정 결과를 읽지 못했어요.', { retry: 0 }); }
+}
+
+// 조각 → [{who: ''(해설) | 인물 이름 | '*'(모르는 대사), text}]
+async function attribute(text, { signal, key, c, ctx = '', onWait }) {
+  const segs = splitVoices(text, true);
+  if (!segs.some((x) => x.who === 'C')) return segs.map((x) => ({ who: '', text: x.text }));
+  const cast = castOf();
+  const roster = cast.chars.map((x) => `${x.name}${x.alias ? ` (다른 호칭: ${x.alias})` : ''}${x.gender && x.gender !== '모름' ? ` [${x.gender}]` : ''}`).join('\n') || '(아직 없음)';
+  const parts = ['attr', c.castModel, roster, ctx.slice(-500), text];
+  const k = await cacheKey(parts);
+  const hit = c.cache ? await cacheGet(k) : null;
+  let lines = hit?.attr;
+  if (!lines) {
+    let n = 0;
+    const marked = segs.map((x) => (x.who === 'C' ? `[Q${++n}]${x.text}` : x.text)).join('\n');
+    const prompt = `소설 원고에서 따옴표로 묶인 대사마다 누가 말했는지 판정하세요.
+- 대사 앞에 [Q1], [Q2] 같은 번호를 붙여 두었습니다. 번호마다 말한 인물을 하나씩 답하세요.
+- 아래 '등장인물'에 있는 인물이면 그 이름을 그대로 쓰세요. 다른 호칭으로 불려도 같은 인물이면 목록의 이름으로 답하세요.
+- 목록에 없는 인물이면 원고에서 부르는 이름을 쓰고, 이름이 없으면 ‘노인’, ‘점원’처럼 짧게 부르세요. 성별도 적으세요.
+- 생각·속말·인용처럼 아무도 소리 내어 말하지 않은 것이면 speaker를 ‘해설’로 답하세요.
+
+등장인물:
+${roster}
+
+바로 앞 내용:
+${ctx.slice(-500) || '(없음)'}
+
+원고:
+${marked}`;
+    const schema = { type: 'OBJECT', properties: { lines: { type: 'ARRAY', items: { type: 'OBJECT', properties: { q: { type: 'INTEGER' }, speaker: { type: 'STRING' }, gender: { type: 'STRING', enum: ['여', '남', '모름'] } }, required: ['q', 'speaker'] } } }, required: ['lines'] };
+    for (let tries = 0; ; tries++) {
+      try { lines = (await askText(prompt, schema, { key, c, signal })).lines || []; break; } catch (e) {
+        if (e.name === 'AbortError' || e.fatal || tries >= 2) throw e;
+        const wait = e.retry || 2000 * 2 ** tries;
+        onWait?.(e, wait);
+        await sleep(wait, signal);
+      }
+    }
+    if (c.cache) cachePut(k, { parts, wav: new ArrayBuffer(0), secs: 0, attr: lines });
+  }
+  // 새 인물은 목록에 넣고 목소리를 정해 둔다
+  const byQ = new Map();
+  for (const l of lines) {
+    const name = String(l.speaker || '').trim();
+    if (NOBODY.test(name.replace(/\s/g, ''))) { byQ.set(l.q, ''); continue; }
+    let ch = charOf(name, cast);
+    if (!ch && cast.chars.length < MAX_CAST) {
+      ch = { name, alias: '', gender: l.gender || '모름', voice: autoVoice(l.gender, cast, c), style: '', auto: true };
+      cast.chars.push(ch);
+      saveCast();
+    }
+    byQ.set(l.q, ch ? ch.name : '*');
+  }
+  let q = 0;
+  return segs.map((x) => (x.who === 'C' ? { who: byQ.has(++q) ? byQ.get(q) : '*', text: x.text } : { who: '', text: x.text }));
+}
+
+// 한 요청에 목소리 두 개까지: [{spk, text, style}] (spk는 목소리 이름)
+function requestGroup(lines, c, useLegacy) {
+  const spks = [...new Set(lines.map((l) => l.spk))];
+  const multi = spks.length === 2;
+  const label = (v) => (v === spks[0] ? 'Speaker1' : 'Speaker2');
+  if (!useLegacy) {
+    return {
+      url: `${API}/interactions`,
+      body: {
+        model: c.model,
+        input: [{ type: 'user_input', content: lines.map((l) => ({ type: 'text', text: l.text, annotations: [{ type: 'speech_metadata', ...(multi ? { speaker: label(l.spk) } : {}), ...(l.style ? { style: l.style } : {}) }] })) }],
+        response_format: { type: 'audio', mime_type: 'audio/wav', sample_rate: RATE },
+        generation_config: { speech_config: multi ? { mode: 'conversational', speakers: spks.map((v) => ({ speaker: label(v), voice: v })) } : [{ voice: spks[0] }] },
+      },
+    };
+  }
+  const trim = (x) => (x || '').trim().replace(/[.。]+$/, '');
+  const how = [...new Map(lines.filter((l) => trim(l.style)).map((l) => [l.spk, `${multi ? label(l.spk) + ': ' : ''}${trim(l.style)}`])).values()].join(' / ');
+  const prompt = multi
+    ? `다음 소설 원고를 한국어로 낭독하세요.${how ? ` (${how})` : ''} 이름표는 읽지 말고, 글은 고치거나 빼지 마세요.\n\n` + lines.map((l) => `${label(l.spk)}: ${l.text}`).join('\n')
+    : `다음 소설 원고를 한국어로 낭독하세요.${how ? ` (${how})` : ''} 글은 고치거나 빼지 말고 그대로 읽으세요.\n\n${lines.map((l) => l.text).join('\n')}`;
+  const vc = (v) => ({ prebuiltVoiceConfig: { voiceName: v } });
+  return {
+    url: `${API}/models/${encodeURIComponent(c.model)}:generateContent`,
+    body: {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: multi ? { multiSpeakerVoiceConfig: { speakerVoiceConfigs: spks.map((v) => ({ speaker: label(v), voiceConfig: vc(v) })) } } : { voiceConfig: vc(spks[0]) },
+      },
+    },
+  };
+}
+
+async function castSynth(text, { signal, onWait, c = cfg(), key = getKey(), ctx = '' } = {}) {
+  if (!key) throw new TtsError('Gemini API 키를 먼저 넣어 주세요.', { fatal: true, status: -1 });
+  const segs = await attribute(text, { signal, key, c, ctx, onWait });
+  const cast = castOf();
+  const pick = (who) => {
+    if (!who) return { voice: c.voice, style: c.style };
+    const ch = who === '*' ? null : charOf(who, cast);
+    return { voice: ch?.voice || c.voice2 || c.voice, style: ch?.style || c.style2 || c.style };
+  };
+  // 목소리가 두 개를 넘으면 요청을 나눈다. 같은 목소리가 이어지면 한 줄로 합친다
+  const groups = [];
+  let g = null;
+  for (const x of segs) {
+    const { voice, style } = pick(x.who);
+    if (!g || (!g.v.has(voice) && g.v.size >= 2)) { g = { v: new Set(), lines: [] }; groups.push(g); }
+    g.v.add(voice);
+    const last = g.lines.at(-1);
+    if (last && last.spk === voice && last.style === style) last.text += ' ' + x.text;
+    else g.lines.push({ spk: voice, text: x.text, style });
+  }
+  const pcms = [];
+  let secs = 0, rate = RATE, cached = true;
+  for (const gr of groups) {
+    const parts = ['cast', c.model, gr.lines];
+    const r = await runSynth(parts, (L) => requestGroup(gr.lines, c, L), { signal, onWait, c, key, chars: nchars(gr.lines.map((l) => l.text).join('')) });
+    const p = pcmOf(r.wav);
+    rate = p.rate; pcms.push(p.pcm); secs += r.secs; cached &&= r.cached;
+  }
+  const len = pcms.reduce((a, p) => a + p.length, 0);
+  const pcm = new Uint8Array(len);
+  let o = 0;
+  for (const p of pcms) { pcm.set(p, o); o += p.length; }
+  return { wav: toWav(pcm, rate), secs, rate, cached };
+}
+// 낭독·음성 파일에서 쓰는 입구: 인물마다 다른 목소리가 켜져 있으면 판정을 거친다
+export function speak(text, opts = {}) {
+  const c = opts.c || cfg();
+  return c.cast ? castSynth(text, opts) : synth(text, opts);
+}
+
+// 원고에서 등장인물 찾기 → [{name, alias, gender, desc}]
+export async function findCast(text, { signal, key = getKey(), c = cfg() } = {}) {
+  if (!key) throw new TtsError('Gemini API 키를 먼저 넣어 주세요.', { fatal: true });
+  const known = castOf().chars.map((x) => x.name).join(', ');
+  const prompt = `다음 소설 원고에서 대사를 하는 등장인물을 모두 찾으세요. 많이 말하는 인물부터, 최대 ${MAX_CAST}명.
+- name: 원고에서 가장 자주 부르는 이름. alias: 같은 인물을 부르는 다른 호칭(쉼표로).
+- gender: 여·남·모름. desc: 나이대와 말투를 짧게 (예: ‘50대 남자, 무뚝뚝한 말투’).
+${known ? `이미 아는 인물: ${known} (같은 인물이면 같은 이름으로)\n` : ''}
+원고:
+${text.slice(0, 300000)}`;
+  const schema = { type: 'OBJECT', properties: { chars: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, alias: { type: 'STRING' }, gender: { type: 'STRING', enum: ['여', '남', '모름'] }, desc: { type: 'STRING' } }, required: ['name'] } } }, required: ['chars'] };
+  return ((await askText(prompt, schema, { key, c, signal })).chars || []).filter((x) => x.name && !NOBODY.test(x.name.replace(/\s/g, '')));
 }
 
 // ---------- 원고 → 조각 ----------
@@ -364,7 +558,7 @@ function job(i) {
   const c = cfg();
   const p = ch.brk
     ? Promise.resolve({ wav: toWav(silence(c.breakPause)), secs: c.breakPause, brk: true })
-    : synth(ch.text, { signal: P.ctrl.signal, onWait: (e, ms) => i === P.i && status(`${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도할게요…`) });
+    : speak(ch.text, { ctx: P.chunks[i - 1]?.text || '', signal: P.ctrl.signal, onWait: (e, ms) => i === P.i && status(`${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도할게요…`) });
   p.catch(() => {}); // 처리는 재생할 때
   P.jobs.set(i, p);
   return p;
@@ -630,11 +824,14 @@ export async function exportAudio() {
     buttons: [{ label: '멈추기', value: 'close' }],
   }).then(() => ctrl.abort());
   try {
+    let prev = '';
     for (const ch of chunks) {
       if (ctrl.signal.aborted) throw new DOMException('멈춤', 'AbortError');
       if (ch.brk) pcms.push(silence(c.breakPause));
       else {
-        const r = await synth(ch.text, { signal: ctrl.signal, onWait: (e, ms) => { const m = $('#axMsg'); if (m) m.textContent = `${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도…`; } });
+        const ctx = prev;
+        prev = ch.text;
+        const r = await speak(ch.text, { ctx, signal: ctrl.signal, onWait: (e, ms) => { const m = $('#axMsg'); if (m) m.textContent = `${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도…`; } });
         pcms.push(pcmOf(r.wav).pcm, silence(c.gap));
       }
       done++;
@@ -731,7 +928,11 @@ export async function showReaderSettings() {
           <label class="field"><span>해설 목소리</span><span class="rd-voice"><select name="voice">${voiceOpts(c.voice)}</select><button type="button" class="small" data-x="pv1" title="미리 듣기">▶ 듣기</button></span></label>
           <label class="field"><span>대사 목소리 (따옴표 안)</span><span class="rd-voice"><select name="voice2">${voiceOpts(c.voice2, '해설과 같은 목소리')}</select><button type="button" class="small" data-x="pv2" title="미리 듣기">▶ 듣기</button></span></label>
         </div>
-        <p class="hint" style="margin:0">대사 목소리를 고르면 “ ” 「 」 안의 말은 그 목소리로 읽어요. 한 번에 두 목소리까지라 모든 인물이 같은 대사 목소리를 씁니다.</p>
+        <p class="hint" style="margin:0">대사 목소리를 고르면 “ ” 「 」 안의 말은 그 목소리로 읽어요. 인물마다 다른 목소리를 켜면 누가 말했는지 모르는 대사에만 이 목소리를 씁니다.</p>
+        <div class="rd-cast">
+          <label class="check"><input type="checkbox" name="cast" ${c.cast ? 'checked' : ''}> <b>인물마다 다른 목소리</b> <small>AI가 대사마다 누가 말하는지 판정 · 인물 ${castOf().chars.length}명 등록 · 최대 ${MAX_CAST}명</small></label>
+          <button type="button" class="small" data-x="cast">등장인물 목소리 정하기…</button>
+        </div>
         <label class="field"><span>읽는 분위기</span><span class="chip-row">${STYLES.map(([id, l]) => `<label class="chip-radio"><input type="radio" name="styleId" value="${id}" ${id === c.styleId ? 'checked' : ''}><span>${l}</span></label>`).join('')}</span></label>
         <label class="field"><span>해설 연기 지시 <small>(목소리에 주는 말 · 글 자체는 바뀌지 않아요)</small></span><textarea name="styleTxt" rows="2" maxlength="300">${h(c.style)}</textarea></label>
         <label class="field rd-s2" ${c.voice2 ? '' : 'hidden'}><span>대사 연기 지시</span><input name="style2" maxlength="200" value="${h(c.style2)}"></label>
@@ -756,8 +957,9 @@ export async function showReaderSettings() {
         <p class="hint" style="margin:0">예상: 원고 1만 자 ≈ 음성 ${fmtSecs(10000 * c.spc)} ≈ ${fmtUsd(estimate(10000).usd)}. 무료 등급 키는 하루 사용량이 정해져 있고, 무료 등급에서 보낸 글은 구글이 서비스 개선에 쓸 수 있어요. 정확한 값은 <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener">구글 가격표</a>를 보세요.</p>
       </section>
     </div>`,
-    buttons: [{ label: '취소', value: 'close' }, { label: '저장하고 여기부터 읽기', value: 'read' }, { label: '저장', value: 'ok', primary: true }],
+    buttons: [{ label: '취소', value: 'close' }, { label: '등장인물', value: 'cast' }, { label: '저장하고 여기부터 읽기', value: 'read' }, { label: '저장', value: 'ok', primary: true }],
     onOpen: (f) => {
+      f.querySelector('.dlg-foot button[value=cast]').hidden = true;
       const keyNow = () => f.key.value.trim() || getKey();
       const draft = () => ({
         ...c, model: f.model.value === 'custom' ? f.modelId.value.trim() : f.model.value, voice: f.voice.value, voice2: f.voice2.value,
@@ -804,6 +1006,7 @@ export async function showReaderSettings() {
         else if (x === 'pv2') say(f.sample.value.trim() || sampleText(), 'voice2', '대사 목소리');
         else if (x === 'forget') { setKey(''); f.key.placeholder = 'AI Studio에서 받은 키'; e.target.remove(); out.textContent = '키를 지웠어요.'; }
         else if (x === 'clear') { await cacheClear(); e.target.disabled = true; out.textContent = '저장해 둔 음성을 비웠어요.'; }
+        else if (x === 'cast') f.requestSubmit(f.querySelector('.dlg-foot button[value=cast]'));
       });
       f.key.addEventListener('input', () => {
         const v = f.key.value.trim();
@@ -813,7 +1016,7 @@ export async function showReaderSettings() {
     },
   });
   previewAudio?.pause();
-  if (r.value !== 'ok' && r.value !== 'read') return;
+  if (r.value !== 'ok' && r.value !== 'read' && r.value !== 'cast') return;
   const f = r.form;
   const newKey = f.key.value.trim();
   if (newKey) setKey(newKey, f.remember.checked);
@@ -823,12 +1026,126 @@ export async function showReaderSettings() {
     engine: f.engine.value, model, voice: f.voice.value, voice2: f.voice2.value, styleId: f.styleId.value,
     style: f.styleTxt.value.trim(), style2: f.style2.value.trim(), rate: +f.rate.value || 1, gap: +f.gap.value, breakPause: +f.breakPause.value,
     chunk: +f.chunk.value || 700, prefetch: +f.prefetch.value || 2, follow: f.follow.checked, nextChapter: f.nextChapter.checked, cache: f.cache.checked,
+    cast: f.cast.checked,
   });
   saveSettings();
+  if (r.value === 'cast') { showCast({ back: true }); return; }
   if (c.engine === 'gemini' && !getKey()) toast('키가 없으면 기기 목소리로 읽어요.', 4000);
   if (P.on) { const i = P.i; stop(); begin(P.chunks[i]?.paras[0]?.from ?? 0); }
   else if (r.value === 'read') readAloud();
   else toast('낭독 설정을 저장했어요.', 1800);
+}
+// ---------- 등장인물 목소리 창 ----------
+const optH = (v, l, sel) => `<option value="${h(v)}" ${v === sel ? 'selected' : ''}>${h(l)}</option>`;
+const voiceOptions = (sel, none) => (none ? optH('', none, sel) : '') +
+  ['여', '남'].map((g) => `<optgroup label="${g === '여' ? '여성 목소리' : '남성 목소리'}">${VOICES.filter((v) => v[2] === g).map(([n, d]) => optH(n, `${n} · ${d}`, sel)).join('')}</optgroup>`).join('');
+export async function showCast({ back = false } = {}) {
+  const c = cfg();
+  const cast = castOf();
+  const list = cast.chars.map((x) => ({ ...x }));
+  const row = (x, i) => `<div class="cast-row" data-i="${i}">
+      <input name="n${i}" value="${h(x.name)}" placeholder="이름" aria-label="이름" required>
+      <input name="a${i}" value="${h(x.alias || '')}" placeholder="다른 호칭 (쉼표로)" aria-label="다른 호칭">
+      <select name="g${i}" aria-label="성별">${['여', '남', '모름'].map((g) => optH(g, g, x.gender || '모름')).join('')}</select>
+      <span class="rd-voice"><select name="v${i}" aria-label="목소리">${voiceOptions(x.voice)}</select><button type="button" class="small" data-c="pv" data-i="${i}" title="미리 듣기" aria-label="미리 듣기">▶</button></span>
+      <input name="s${i}" value="${h(x.style || '')}" placeholder="연기 지시 (예: 50대 남자, 무뚝뚝하게)" aria-label="연기 지시" maxlength="200">
+      <button type="button" class="small cast-del" data-c="del" data-i="${i}" title="지우기" aria-label="${h(x.name)} 지우기">✕</button></div>`;
+  const r = await dialog({
+    title: '등장인물 목소리',
+    wide: true,
+    body: `<div class="rd-set cast-set">
+      <label class="check"><input type="checkbox" name="on" ${c.cast ? 'checked' : ''}> <b>인물마다 다른 목소리로 읽기</b> <small>AI가 조각마다 대사를 누가 말했는지 판정해요. 판정 요금은 음성보다 훨씬 적어요.</small></label>
+      <div class="row2">
+        <label class="field"><span>해설(내레이션) 목소리</span><span class="rd-voice"><select name="nv">${voiceOptions(c.voice)}</select><button type="button" class="small" data-c="pvn" title="미리 듣기">▶</button></span></label>
+        <label class="field"><span>누군지 모르는 대사</span><select name="dv">${voiceOptions(c.voice2, '해설과 같은 목소리')}</select></label>
+      </div>
+      <section>
+        <h3>등장인물 <small id="castN"></small></h3>
+        <div class="cast-find"><button type="button" class="small" data-c="find" data-scope="ch">AI로 이 장에서 인물 찾기</button><button type="button" class="small" data-c="find" data-scope="all">작품 전체에서 찾기</button><button type="button" class="small" data-c="add">+ 직접 추가</button><span id="castMsg" class="hint" aria-live="polite"></span></div>
+        <div class="cast-head" aria-hidden="true"><span>이름</span><span>다른 호칭</span><span>성별</span><span>목소리</span><span>연기 지시</span><span></span></div>
+        <div id="castList" class="cast-list"></div>
+        <p class="hint" style="margin:0">읽다가 목록에 없는 인물이 나오면 AI가 알아서 넣고 아직 안 쓴 목소리를 정해 둬요. 목소리는 ${VOICES.length}개라 해설을 빼고 ${MAX_CAST}명까지 서로 다른 목소리를 줄 수 있어요.</p>
+      </section>
+      <label class="field"><span>판정 모델 <small>(글 모델 · 바꿀 일은 거의 없어요)</small></span><input name="model" value="${h(c.castModel || DEF.castModel)}" spellcheck="false"></label>
+    </div>`,
+    buttons: [{ label: '취소', value: 'close' }, { label: '저장', value: 'ok', primary: true }],
+    onOpen: (f) => {
+      const msg = $('#castMsg');
+      const read = () => list.forEach((x, i) => {
+        if (!f[`n${i}`]) return;
+        Object.assign(x, { name: f[`n${i}`].value.trim(), alias: f[`a${i}`].value.trim(), gender: f[`g${i}`].value, voice: f[`v${i}`].value, style: f[`s${i}`].value.trim() });
+      });
+      const draw = () => {
+        $('#castList').innerHTML = list.map(row).join('') || '<p class="hint">아직 없어요. AI로 찾거나 직접 넣어 주세요.</p>';
+        const dup = list.length - new Set(list.map((x) => x.voice)).size;
+        $('#castN').textContent = `${list.length}/${MAX_CAST}명${dup ? ` · 같은 목소리를 쓰는 인물 ${dup}쌍` : ''}`;
+        f.querySelector('[data-c=add]').disabled = list.length >= MAX_CAST;
+      };
+      draw();
+      let busy = null;
+      const preview = async (voice, style, name) => {
+        busy?.abort(); busy = new AbortController();
+        msg.textContent = '만드는 중…';
+        try {
+          const r = await synth(`“${name ? name + '의 목소리는 이렇게 들려요.' : '해설은 이렇게 들려요.'} 오늘은 바람이 꽤 차네요.”`, { c: { ...c, voice, voice2: '', style: style || c.style }, signal: busy.signal });
+          previewAudio?.pause();
+          previewAudio = new Audio(URL.createObjectURL(new Blob([r.wav], { type: 'audio/wav' })));
+          previewAudio.preservesPitch = true;
+          await previewAudio.play().catch(() => {});
+          msg.textContent = '';
+        } catch (e) { if (e.name !== 'AbortError') msg.textContent = '✕ ' + e.message; }
+      };
+      f.addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-c]');
+        if (!b) return;
+        read();
+        const i = +b.dataset.i;
+        if (b.dataset.c === 'pv') preview(list[i].voice, list[i].style, list[i].name);
+        if (b.dataset.c === 'pvn') preview(f.nv.value, '', '');
+        if (b.dataset.c === 'del') { list.splice(i, 1); draw(); }
+        if (b.dataset.c === 'add' && list.length < MAX_CAST) {
+          list.push({ name: '', alias: '', gender: '모름', voice: autoVoice('', { chars: list }, { ...c, voice: f.nv.value }), style: '' });
+          draw(); f[`n${list.length - 1}`]?.focus();
+        }
+        if (b.dataset.c === 'find') {
+          const all = b.dataset.scope === 'all';
+          const text = all
+            ? app.project.order.map((id) => (id === app.cur ? app.editor.getText() : htmlParagraphs(app.chapters.get(id)?.html || '').join('\n'))).join('\n\n')
+            : app.editor.getText();
+          if (!text.trim()) { msg.textContent = '원고가 비어 있어요.'; return; }
+          f.querySelectorAll('[data-c=find]').forEach((x) => { x.disabled = true; });
+          msg.textContent = 'AI가 인물을 찾는 중…';
+          try {
+            const got = await findCast(text, { c: { ...c, castModel: f.model.value.trim() || DEF.castModel } });
+            let added = 0;
+            for (const g of got) {
+              if (list.length >= MAX_CAST) break;
+              const ex = charOf(g.name, { chars: list });
+              if (ex) { if (!ex.alias && g.alias) ex.alias = g.alias; if ((!ex.gender || ex.gender === '모름') && g.gender) ex.gender = g.gender; if (!ex.style && g.desc) ex.style = g.desc; continue; }
+              list.push({ name: g.name, alias: g.alias || '', gender: g.gender || '모름', voice: autoVoice(g.gender, { chars: list }, { ...c, voice: f.nv.value }), style: g.desc || '' });
+              added++;
+            }
+            draw();
+            msg.textContent = got.length ? `${got.length}명을 찾았고 ${added}명을 새로 넣었어요. 목소리와 연기 지시를 확인해 주세요.` : '대사를 하는 인물을 찾지 못했어요.';
+          } catch (err) { msg.textContent = '✕ ' + err.message; }
+          f.querySelectorAll('[data-c=find]').forEach((x) => { x.disabled = false; });
+        }
+      });
+      f.addEventListener('submit', () => { busy?.abort(); previewAudio?.pause(); }, { once: true });
+    },
+  });
+  previewAudio?.pause();
+  if (r.value === 'ok') {
+    const f = r.form;
+    list.forEach((x, i) => { if (f[`n${i}`]) Object.assign(x, { name: f[`n${i}`].value.trim(), alias: f[`a${i}`].value.trim(), gender: f[`g${i}`].value, voice: f[`v${i}`].value, style: f[`s${i}`].value.trim() }); });
+    cast.chars = list.filter((x) => x.name).map(({ auto, ...x }) => x);
+    Object.assign(c, { cast: f.on.checked, voice: f.nv.value, voice2: f.dv.value, castModel: f.model.value.trim() || DEF.castModel });
+    saveSettings();
+    await S.putProject(app.project);
+    if (P.on) { const i = P.i; stop(); begin(P.chunks[i]?.paras[0]?.from ?? 0); }
+    toast(c.cast ? `인물 ${cast.chars.length}명의 목소리를 저장했어요. 인물마다 다른 목소리로 읽어요.` : '등장인물 목소리를 저장했어요 (지금은 꺼져 있어요).', 3000);
+  }
+  if (back) showReaderSettings();
 }
 function sampleText() {
   const t = app.editor?.state.selection.$from.parent.textContent.trim();

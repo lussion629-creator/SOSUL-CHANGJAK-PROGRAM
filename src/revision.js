@@ -7,6 +7,7 @@ import { paginate } from './paginate.js';
 import { setDiffMarks, docParagraphs } from './editor.js';
 import { countHtml, fmt } from './stats.js';
 import { $, $$, h, toast, dayLabel, hm } from './ui.js';
+import { toggleBook } from './bookview.js';
 
 const rv = { open: false, base: null, left: 'page', right: 'edit', marks: true, result: null, timer: null };
 
@@ -30,6 +31,8 @@ export async function openRevision(snapId) {
   $('#revision').hidden = false;
   $('#paperScroll').hidden = true;
   $('#cork').hidden = true;
+  // 전체 보기가 열려 있으면 퇴고 화면을 가리므로 닫는다 (복구 창의 '비교'가 아무 일도 안 하는 것처럼 보이던 문제)
+  if (!$('#bookView').hidden) await toggleBook(false);
   document.body.classList.add('revising');
   render();
 }
