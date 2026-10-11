@@ -3,7 +3,7 @@ import { app } from './app.js';
 import { FONTS } from './fonts.js';
 import { layoutOf } from './layout.js';
 import { isPageView } from './pageview.js';
-import { PARA_KEYS, runCommand, HL_COLORS, hlColor, setHlColor, hexOf } from './editor.js';
+import { PARA_KEYS, runCommand, HL_COLORS, TEXT_COLORS, hlColor, setHlColor, hexOf } from './editor.js';
 import { saveSettings } from './app.js';
 import { keyOf, pretty } from './keys.js';
 const kb = (id) => pretty(keyOf(id));
@@ -111,7 +111,7 @@ export async function showFontDialog() {
       <label class="field"><span>글꼴</span><select name="font">${fontOpts.map(([v, l]) => `<option value="${h(v)}" ${v === cur ? 'selected' : ''}>${h(l)}</option>`).join('')}</select></label>
       <label class="field"><span>크기 (pt)</span><input name="size" type="number" step="0.5" min="1" max="400" value="${fmtPt(size)}"></label>
       <label class="field"><span>자간</span><span class="ls-pair"><input name="ls" type="number" step="${lsPt ? 0.1 : 1}" value="${lsVal}" placeholder="기본"><select name="lsUnit" aria-label="자간 단위"><option value="pct" ${lsPt ? '' : 'selected'}>% (한글)</option><option value="pt" ${lsPt ? 'selected' : ''}>pt (Word)</option></select></span></label>
-      <label class="field"><span>글자 색</span><span class="fmt-color"><input name="color" type="color" value="${h(curColor || '#222222')}"><label class="check"><input type="checkbox" name="nocolor" ${curColor ? '' : 'checked'}> 기본 색</label></span></label>
+      <div class="field fmt-color-field"><span>글자 색</span>${colorChoices(curColor)}</div>
     </div>
     <div class="fmt-checks">
       <label class="check"><input type="checkbox" name="b" ${has('bold') ? 'checked' : ''}> <b>굵게</b></label>
@@ -129,13 +129,21 @@ export async function showFontDialog() {
         prev.style.fontSize = `${Math.min(28, +f.size.value || size) * (96 / 72)}px`;
         prev.style.letterSpacing = f.ls.value === '' ? '' : f.lsUnit.value === 'pt' ? `${+f.ls.value}pt` : `${+f.ls.value / 100}em`;
         f.ls.step = f.lsUnit.value === 'pt' ? 0.1 : 1;
-        prev.style.color = f.nocolor.checked ? '' : f.color.value;
+        prev.style.color = f.color.value || '';
         prev.style.fontWeight = f.b.checked ? '700' : '';
         prev.style.fontStyle = f.i.checked ? 'italic' : '';
         prev.style.textDecoration = [f.u.checked && 'underline', f.s.checked && 'line-through'].filter(Boolean).join(' ');
       };
       f.addEventListener('input', upd);
-      f.color.addEventListener('input', () => { f.nocolor.checked = false; upd(); });
+      f.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-tc]');
+        if (!b) return;
+        f.color.value = b.dataset.tc;
+        f.querySelectorAll('[data-tc]').forEach((x) => x.classList.toggle('on', x === b));
+        upd();
+      });
+      f.colorPick.addEventListener('input', () => { f.color.value = f.colorPick.value; f.querySelectorAll('[data-tc]').forEach((x) => x.classList.remove('on')); upd(); });
+      f.colorPick.addEventListener('change', () => rememberColor(f.colorPick.value));
       upd();
     },
   });
@@ -152,7 +160,7 @@ export async function showFontDialog() {
   if (sz && sz !== size) attrs.fontSize = `${fmtPt(sz)}pt`;
   const ls = f.ls.value === '' ? null : parseSpacing(f.ls.value + (f.lsUnit.value === 'pt' ? 'pt' : ''));
   if (ls !== (ts.letterSpacing ?? null)) attrs.letterSpacing = ls;
-  const color = f.nocolor.checked ? null : f.color.value;
+  const color = f.color.value || null;
   if (color !== curColor) attrs.color = color;
   const c = ed.chain().focus();
   if (Object.keys(attrs).length) c.setMark('textStyle', attrs);
@@ -299,38 +307,125 @@ function read(f) {
   };
 }
 
+// ---------- 글자 색 ----------
+const HEX6 = /^#[0-9a-f]{6}$/i;
+const recentColors = () => (app.settings.tcRecent || []).filter((c) => HEX6.test(c) && !TEXT_COLORS.some(([x]) => x === c));
+function rememberColor(c) {
+  c = c.toLowerCase();
+  if (TEXT_COLORS.some(([x]) => x === c)) return;
+  app.settings.tcRecent = [c, ...(app.settings.tcRecent || []).filter((x) => x !== c)].slice(0, 7);
+  saveSettings();
+}
+// 글꼴 창의 색 고르기: 기본 색 + 대표 색 견본 + 최근에 직접 고른 색 + 직접 고르기(RGB)
+function colorChoices(cur) {
+  const c = (cur || '').toLowerCase();
+  const sw = (v, n) => `<button type="button" class="tc-sw ${v === c ? 'on' : ''}" data-tc="${v}" style="--sw:${v || 'transparent'}" title="${n}" aria-label="${n}">${v ? '' : '가'}</button>`;
+  return `<input type="hidden" name="color" value="${h(c)}"><span class="tc-grid">${sw('', '기본 색')}${TEXT_COLORS.map(([v, n]) => sw(v, n)).join('')}${recentColors().map((v) => sw(v, v)).join('')}</span>
+    <label class="tc-custom"><span>다른 색 직접 고르기 (RGB)</span><input type="color" name="colorPick" value="${HEX6.test(c) ? c : '#2e86c1'}"></label>`;
+}
+let popSel = null;
+const keepSel = () => { const s = app.editor.state.selection; popSel = s.empty ? null : { from: s.from, to: s.to, doc: app.editor.state.doc }; };
+const restoreSel = () => {
+  const s = app.editor.state.selection;
+  if (s.empty && popSel && popSel.doc === app.editor.state.doc) app.editor.commands.setTextSelection({ from: popSel.from, to: popSel.to });
+  popSel = null;
+};
+export function bindTextColor() {
+  const btn = $('#tcBtn'), more = $('#tcMore'), pop = $('#tcPop');
+  if (!pop) return;
+  let last = HEX6.test(app.settings.tcColor || '') ? app.settings.tcColor : TEXT_COLORS[0][0];
+  const show = () => btn.style.setProperty('--tc-pick', last);
+  show();
+  const apply = (c) => {
+    restoreSel();
+    if (!c) { app.editor.chain().focus().unsetColor().run(); return; }
+    last = c.toLowerCase(); app.settings.tcColor = last; saveSettings(); show();
+    if (app.editor.state.selection.empty) toast('글자 색을 바꿨어요. 지금부터 쓰는 글자에 들어가요.', 2000);
+    app.editor.chain().focus().setColor(last).run();
+  };
+  const draw = () => {
+    const cur = (hexOf(app.editor.getAttributes('textStyle').color) || '').toLowerCase();
+    const sw = (v, n) => `<button type="button" class="tc-sw ${v === cur ? 'on' : ''}" data-tc="${v}" style="--sw:${v || 'transparent'}" title="${n}" aria-label="${n}">${v ? '' : '가'}</button>`;
+    pop.innerHTML = `<div class="tc-grid">${sw('', '기본 색')}${TEXT_COLORS.map(([v, n]) => sw(v, n)).join('')}</div>
+      ${recentColors().length ? `<p class="hl-tip">직접 고른 색</p><div class="tc-grid">${recentColors().map((v) => sw(v, v)).join('')}</div>` : ''}
+      <label class="hl-custom"><span>다른 색 직접 고르기 (RGB)</span><input type="color" value="${HEX6.test(cur) ? cur : last}" aria-label="글자 색 직접 고르기"></label>`;
+  };
+  const open = () => {
+    keepSel();
+    draw();
+    const r = more.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(r.left - 160, innerWidth - 250)) + 'px';
+    pop.style.top = r.bottom + 4 + 'px';
+    pop.classList.add('open');
+  };
+  btn.addEventListener('click', () => apply(last));
+  btn.addEventListener('contextmenu', (e) => { e.preventDefault(); open(); });
+  more.addEventListener('click', (e) => { e.stopPropagation(); if (pop.classList.contains('open')) pop.classList.remove('open'); else open(); });
+  pop.addEventListener('mousedown', (e) => { if (e.target.type !== 'color') e.preventDefault(); });
+  pop.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tc]');
+    if (!b) return;
+    e.stopPropagation();
+    pop.classList.remove('open');
+    apply(b.dataset.tc);
+  });
+  pop.addEventListener('change', (e) => { if (e.target.type === 'color') { pop.classList.remove('open'); rememberColor(e.target.value); apply(e.target.value); } });
+  addEventListener('mousedown', (e) => { if (!pop.contains(e.target) && e.target !== more) pop.classList.remove('open'); });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') pop.classList.remove('open'); });
+}
+
 // ---------- 형광펜 색 ----------
 export function bindHighlight() {
   const pop = $('#hlPop'), more = $('#hlMore');
   if (!pop) return;
+  const HEX = /^#[0-9a-f]{6}$/i;
   const pick = (c) => { setHlColor(c); $('#hlBtn').style.setProperty('--hl-pick', c); };
-  pick(app.settings.hlColor && HL_COLORS.some(([c]) => c === app.settings.hlColor) ? app.settings.hlColor : HL_COLORS[0][0]);
+  pick(HEX.test(app.settings.hlColor || '') ? app.settings.hlColor : HL_COLORS[0][0]);
   const draw = () => {
-    const cur = app.editor.getAttributes('highlight').color;
-    pop.innerHTML = `<div class="sw-row">${HL_COLORS.map(([c, n]) => `<button type="button" data-hl="${c}" class="${c === cur ? 'on' : ''}" style="background:${c}" title="${n}">${n}</button>`).join('')}</div>
+    const cur = (app.editor.getAttributes('highlight').color || '').toLowerCase();
+    const recent = (app.settings.hlRecent || []).filter((c) => HEX.test(c) && !HL_COLORS.some(([x]) => x === c));
+    const sw = (c, n) => `<button type="button" data-hl="${c}" class="${c === cur ? 'on' : ''}" style="background:${c}" title="${n}" aria-label="${n}">${n}</button>`;
+    pop.innerHTML = `<p class="hl-tip">글을 고른 채로 색을 누르면 바로 칠해요. 고른 색은 형광펜 단추에도 기억돼요.</p>
+      <div class="sw-row">${HL_COLORS.map(([c, n]) => sw(c, n)).join('')}${recent.map((c) => sw(c, '')).join('')}</div>
+      <label class="hl-custom"><span>직접 고르기</span><input type="color" value="${HEX.test(cur) ? cur : hlColor()}" aria-label="형광펜 색 직접 고르기"></label>
       <button type="button" data-hl="">형광펜 지우기</button>`;
   };
-  more.addEventListener('click', (e) => {
-    e.stopPropagation(); draw();
+  const open = () => {
+    keepSel();
+    draw();
     const r = more.getBoundingClientRect();
-    pop.style.left = Math.max(8, Math.min(r.left - 160, innerWidth - 220)) + 'px';
+    pop.style.left = Math.max(8, Math.min(r.left - 160, innerWidth - 230)) + 'px';
     pop.style.top = r.bottom + 4 + 'px';
-    pop.classList.toggle('open');
-  });
+    pop.classList.add('open');
+  };
+  // 색을 고르면: 단추에 기억하고, 고른 글이 있으면 바로 칠한다
+  const apply = (c) => {
+    restoreSel();
+    c = c.toLowerCase();
+    pick(c);
+    app.settings.hlColor = c;
+    if (!HL_COLORS.some(([x]) => x === c)) app.settings.hlRecent = [c, ...(app.settings.hlRecent || []).filter((x) => x !== c)].slice(0, 4);
+    saveSettings();
+    if (app.editor.state.selection.empty) { toast('형광펜 색을 바꿨어요. 글을 고르고 형광펜 단추를 누르세요.', 2400); return; }
+    app.editor.chain().focus().setHighlight({ color: c }).run();
+  };
+  more.addEventListener('click', (e) => { e.stopPropagation(); if (pop.classList.contains('open')) pop.classList.remove('open'); else open(); });
+  // 형광펜 단추를 마우스 오른쪽으로 눌러도 색 고르기가 열린다
+  $('#hlBtn').addEventListener('contextmenu', (e) => { e.preventDefault(); open(); });
+  pop.addEventListener('mousedown', (e) => { if (e.target.type !== 'color') e.preventDefault(); }); // 편집기의 선택을 지킨다
   pop.addEventListener('click', (e) => {
     const b = e.target.closest('[data-hl]');
     if (!b) return;
     e.stopPropagation();
     pop.classList.remove('open');
-    if (!b.dataset.hl) { runCommand(app.editor, 'unhighlight'); return; }
-    pick(b.dataset.hl);
-    app.settings.hlColor = b.dataset.hl;
-    saveSettings();
-    if (app.editor.state.selection.empty) { toast('형광펜 색을 바꿨어요. 글을 고르고 형광펜 단추를 누르세요.', 2000); return; }
-    app.editor.chain().focus().setHighlight({ color: b.dataset.hl }).run();
+    if (!b.dataset.hl) { restoreSel(); runCommand(app.editor, 'unhighlight'); return; }
+    apply(b.dataset.hl);
   });
+  pop.addEventListener('change', (e) => { if (e.target.type === 'color') { pop.classList.remove('open'); apply(e.target.value); } });
   addEventListener('mousedown', (e) => { if (!pop.contains(e.target) && e.target !== more) pop.classList.remove('open'); });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') pop.classList.remove('open'); });
 }
+export const applyHighlight = (c) => { app.editor.chain().focus().setHighlight({ color: c }).run(); };
 
 // ---------- 마우스 오른쪽 메뉴 ----------
 export function bindContextMenu() {
@@ -362,6 +457,7 @@ export function bindContextMenu() {
       <button data-c="font"><span>글꼴…</span><small>${kb('fontDlg')}</small></button>
       <button data-c="para"><span>단락…</span><small>${kb('paraDlg')}</small></button>
       ${sel ? `<div class="ctx-sub"><span class="ctx-sub-l">주석</span><button data-c="a-index">색인</button><button data-c="a-fix">교정 제안</button><button data-c="a-cite">인용</button><button data-c="a-intent">의도</button></div><hr>` : ''}
+      ${sel ? `<div class="ctx-sub"><span class="ctx-sub-l">형광펜</span>${HL_COLORS.map(([c, n]) => `<button data-c="hl" data-color="${c}" class="ctx-sw" style="background:${c}" title="${n}" aria-label="형광펜 ${n}"></button>`).join('')}<button data-c="hl" data-color="" title="형광펜 지우기">지우기</button></div><hr>` : ''}
       ${annoHere ? `<button data-c="a-open"><span>이 주석 보기·고치기</span></button><hr>` : ''}
       <button data-c="lsNarrow"><span>자간 좁게 (${sel ? '고른 글자' : '이 문단'})</span><small>${kb('lsNarrow')}</small></button>
       <button data-c="lsWide"><span>자간 넓게 (${sel ? '고른 글자' : '이 문단'})</span><small>${kb('lsWide')}</small></button>
@@ -398,6 +494,7 @@ export function bindContextMenu() {
     } else if (c === 'font') showFontDialog();
     else if (c === 'para') showParaDialog();
     else if (c === 'clear') runCommand(ed(), 'clear');
+    else if (c === 'hl') { if (b.dataset.color) runCommand(ed(), 'highlight', b.dataset.color); else runCommand(ed(), 'unhighlight'); }
     else if (c.startsWith('a-') && c !== 'a-open') { const { addAnnotation } = await import('./annotate.js'); addAnnotation(c.slice(2)); }
     else if (c === 'a-open') { const { editAnno } = await import('./annotate.js'); editAnno(menu.dataset.anno); }
     else if (c === 'lsNarrow' || c === 'lsWide') stepSpacing(c === 'lsWide' ? 1 : -1);

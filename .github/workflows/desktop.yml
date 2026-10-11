@@ -1,13 +1,21 @@
 name: 데스크톱 앱 만들기
 
-# v로 시작하는 태그(예: v1.0.1)를 올리면 Windows·macOS 설치 파일을 만들어 릴리스에 붙인다
+# 새 버전 내기: package.json의 version을 올려 main에 올리면(또는 이 작업을 직접 실행하면)
+# Windows·macOS 설치 파일을 만들어 GitHub 릴리스 v<버전>에 붙인다.
+# 설치된 앱은 이 릴리스를 보고 스스로 업데이트한다 (Windows: 자동 설치, macOS: 새 버전 알림).
 on:
   push:
+    branches: [main]
+    paths: ['package.json']
     tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,10 +41,27 @@ jobs:
           name: ${{ matrix.os }}
           path: |
             release/*.exe
+            release/*.exe.blockmap
             release/*.dmg
-      - if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+            release/latest*.yml
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          files: |
-            release/*.exe
-            release/*.dmg
+          path: out
+          merge-multiple: true
+      - name: 릴리스에 올리기 (이미 있으면 파일만 바꾸기)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="v$(node -p "require('./package.json').version")"
+          ls -la out
+          if gh release view "$V" >/dev/null 2>&1; then
+            gh release upload "$V" out/* --clobber
+          else
+            gh release create "$V" out/* --target "$GITHUB_SHA" --title "소설 워드프로세서 ${V#v}" --notes-file .github/release-notes.md
+          fi

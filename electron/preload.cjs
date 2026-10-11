@@ -4,5 +4,7 @@ if (location.origin === 'http://localhost:47615') {
   contextBridge.exposeInMainWorld('desktop', {
     platform: process.platform,
     onOpenFile: (cb) => { ipcRenderer.on('open-file', (_e, f) => cb(f)); ipcRenderer.send('renderer-ready'); },
+    checkUpdate: () => ipcRenderer.invoke('check-update'),
+    version: () => ipcRenderer.invoke('app-version'),
   });
 }

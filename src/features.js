@@ -3,7 +3,7 @@ import * as S from './store.js';
 import * as G from './gdrive.js';
 import {
   app, saveNow, openProject, openChapter, addChapter, renderBinder, saveSettings, applySettings, updateCounts,
-  todayWritten, renderGoal, syncNow, refreshSyncPill, bundleForSync, STATUS, projectTotal, beforeImport,
+  todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, bundleForSync, STATUS, projectTotal, beforeImport,
 } from './app.js';
 import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
@@ -307,7 +307,7 @@ export async function showGoals() {
   const total = projectTotal();
   const goal = p.goalDaily || 0;
   // 연속 기록
-  const written = new Map(daily.map((d) => [d.date, d.add ?? Math.max(0, (d.end || 0) - (d.start || 0))]));
+  const written = new Map(daily.map((d) => [d.date, addOf(d)]));
   let streak = 0;
   const ok = (w) => w > 0 && (!goal || w >= goal);
   const d0 = new Date();

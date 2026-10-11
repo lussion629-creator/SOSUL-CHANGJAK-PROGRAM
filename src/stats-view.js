@@ -1,8 +1,8 @@
 // 하루 기록 그래프: 날마다 쓴 양·고친 양·지운 양을 따로, 쌓아서, 또는 합산해서 본다
 import * as S from './store.js';
-import { app, saveNow } from './app.js';
+import { app, saveNow, saveSettings, addOf, addAll, addTyped, resetToday, restoreToday, renderGoal } from './app.js';
 import { fmt } from './stats.js';
-import { $, $$, h, dialog } from './ui.js';
+import { $, $$, h, dialog, toastAction, confirmDlg } from './ui.js';
 
 const SERIES = [
   { key: 'add', name: '쓴 양', cls: 's-add' },
@@ -18,7 +18,7 @@ async function dailyRows(scope) {
   const by = new Map();
   for (const r of all) {
     const v = by.get(r.date) || { add: 0, rev: 0, del: 0 };
-    v.add += r.add ?? Math.max(0, (r.end || 0) - (r.start || 0));
+    v.add += addOf(r);
     v.rev += r.rev || 0;
     v.del += r.del || 0;
     by.set(r.date, v);
@@ -120,7 +120,7 @@ function body(days, width) {
   const rows = days.filter((d) => d.add + d.rev + d.del > 0).reverse();
   return `
     <div class="statgrid">
-      <div class="stat"><b class="tn">${fmt(tot.add)}</b><span><i class="sw s-add"></i>쓴 양</span></div>
+      <div class="stat"><b class="tn">${fmt(tot.add)}</b><span><i class="sw s-add"></i>쓴 양 <small>(${app.settings.countPaste ? '붙여넣기 포함' : '붙여넣기 뺌'})</small></span></div>
       <div class="stat"><b class="tn">${fmt(tot.rev)}</b><span><i class="sw s-rev"></i>고친 양</span></div>
       <div class="stat"><b class="tn">${fmt(tot.del)}</b><span><i class="sw s-del"></i>지운 양</span></div>
       <div class="stat"><b class="tn">${fmt(sum)}</b><span>합계 (${active}일 동안)</span></div>
@@ -183,4 +183,41 @@ export async function showStats() {
       });
     },
   });
+}
+
+// ---------- 오늘 쓴 양 (상태 표시줄) ----------
+// 직접 친 글자 / 붙여넣은 글자 / 합계를 보여 주고, 목표·그래프에 어느 쪽을 셀지 고르고, 오늘 기록을 0부터 다시 셀 수 있다
+export async function showToday() {
+  await saveNow();
+  const r = app.todayRec || {};
+  const typed = addTyped(r), all = addAll(r), paste = all - typed;
+  const goal = app.project?.goalDaily || 0;
+  const res = await dialog({
+    title: '오늘 쓴 양',
+    body: `<div class="statgrid today-grid">
+        <div class="stat"><b class="tn">${fmt(typed)}</b><span>직접 친 글자</span></div>
+        <div class="stat"><b class="tn">${fmt(paste)}</b><span>붙여넣은 글자</span></div>
+        <div class="stat"><b class="tn">${fmt(all)}</b><span>합계 (붙여넣기 포함)</span></div>
+        <div class="stat"><b class="tn">${fmt(r.rev || 0)} · ${fmt(r.del || 0)}</b><span>고친 · 지운 글자</span></div>
+      </div>
+      <fieldset class="today-mode"><legend>목표·그래프·연속 기록에 셀 양</legend>
+        <label class="radio"><input type="radio" name="mode" value="typed" ${app.settings.countPaste ? '' : 'checked'}> 직접 친 글자만 <small>복사·붙여넣기, 끌어 놓기는 빼요</small></label>
+        <label class="radio"><input type="radio" name="mode" value="all" ${app.settings.countPaste ? 'checked' : ''}> 붙여넣기까지 포함</label>
+      </fieldset>
+      ${goal ? `<p class="hint" style="margin:0">오늘 목표 ${fmt(goal)}자 중 <b id="tdGoal">${fmt(app.settings.countPaste ? all : typed)}</b>자</p>` : ''}
+      <p class="hint" style="margin:0">공백은 세지 않아요. ${r.resetAt ? `오늘 ${new Date(r.resetAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}에 초기화한 뒤부터 센 값이에요. ` : ''}붙여넣기는 이 기능을 넣은 뒤부터 따로 세요.</p>`,
+    buttons: [{ label: '오늘 기록 초기화', value: 'reset', left: true }, { label: '날짜별 그래프', value: 'graph' }, { label: '닫기', value: 'close', primary: true }],
+    onOpen: (f) => f.querySelectorAll('[name=mode]').forEach((x) => x.addEventListener('change', () => {
+      app.settings.countPaste = f.mode.value === 'all';
+      saveSettings();
+      renderGoal();
+      const g = f.querySelector('#tdGoal');
+      if (g) g.textContent = fmt(app.settings.countPaste ? all : typed);
+    })),
+  });
+  if (res.value === 'graph') { showStats(); return; }
+  if (res.value !== 'reset') return;
+  if (!(await confirmDlg('오늘 기록 초기화', `이 작품의 오늘 쓴·고친·지운 양을 0으로 되돌리고 지금부터 다시 셉니다. 원고는 바뀌지 않아요.`, '초기화'))) return;
+  const old = await resetToday();
+  toastAction('오늘 기록을 0부터 다시 세요.', '되돌리기', () => restoreToday(old));
 }

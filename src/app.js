@@ -66,6 +66,14 @@ export function initEditor() {
     smartQuotes: () => app.settings.smartQuotes,
     typewriter: () => app.settings.typewriter && document.body.classList.contains('focus'),
   });
+  // 붙여넣기·끌어 놓기로 들어온 글자 수를 세어 둔다 (오늘 쓴 양에서 따로 보여 주려고)
+  app.editor.on('transaction', ({ transaction: tr }) => {
+    const ev = tr.getMeta('uiEvent');
+    if ((ev !== 'paste' && ev !== 'drop') || !tr.docChanged) return;
+    let n = 0;
+    for (const s of tr.steps) if (s.slice?.content) n += s.slice.content.textBetween(0, s.slice.content.size, '', '').replace(/\s/g, '').length;
+    app.pastePending = (app.pastePending || 0) + n;
+  });
 }
 
 let tbRaf;
@@ -182,10 +190,15 @@ async function updateDaily(amounts, chId) {
   if (!rec) rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total };
   rec.end = total;
   if (amounts) {
+    // 붙여넣은 글자: 이번에 늘어난 쓴 양보다 많을 수는 없다 (붙여넣고 바로 되돌린 경우 등)
+    const paste = Math.min(app.pastePending || 0, amounts.add);
+    app.pastePending = 0;
     for (const k of ['add', 'rev', 'del']) rec[k] = (rec[k] || 0) + amounts[k];
+    rec.paste = (rec.paste || 0) + paste;
     rec.byCh ??= {};
     const c = (rec.byCh[chId] ??= { add: 0, rev: 0, del: 0 });
     for (const k of ['add', 'rev', 'del']) c[k] += amounts[k];
+    c.paste = (c.paste || 0) + paste;
   }
   rec.written = Math.max(rec.written || 0, total - rec.start);
   await S.putDaily(rec);
@@ -286,15 +299,41 @@ export function updateCounts() {
   if (fc) fc.textContent = `${fmt(c.withSpace)}자 · 오늘 ${fmt(todayWritten())}자`;
 }
 
-// 오늘 쓴 양: 새로 써 넣은 글자(공백 제외). 예전 기록에는 순증가분을 쓴다
-export const todayWritten = () => app.todayRec?.add ?? Math.max(0, (app.todayRec?.end || 0) - (app.todayRec?.start || 0));
+// 쓴 양: 새로 써 넣은 글자(공백 제외). 예전 기록에는 순증가분을 쓴다.
+// 설정(countPaste)에 따라 붙여넣은 글자를 빼거나 넣는다 (기본: 뺀다 = 직접 친 글자만)
+export const addAll = (r) => (r ? r.add ?? Math.max(0, (r.end || 0) - (r.start || 0)) : 0);
+export const addTyped = (r) => Math.max(0, addAll(r) - (r?.paste || 0));
+export const addOf = (r) => (app.settings.countPaste ? addAll(r) : addTyped(r));
+export const todayWritten = () => addOf(app.todayRec);
+
+// 오늘 기록 초기화 (이 작품). 되돌리기를 위해 이전 기록을 돌려준다
+export async function resetToday() {
+  await saveNow();
+  const total = projectTotal();
+  const d = S.today();
+  const old = (await S.getDaily(app.project.id, d)) || app.todayRec;
+  const rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total, written: 0, add: 0, rev: 0, del: 0, paste: 0, byCh: {}, resetAt: Date.now() };
+  app.pastePending = 0;
+  await S.putDaily(rec);
+  app.todayRec = rec;
+  renderGoal();
+  return old ? structuredClone(old) : null;
+}
+export async function restoreToday(old) {
+  if (!old) return;
+  await S.putDaily(old);
+  app.todayRec = old;
+  renderGoal();
+}
 
 export function renderGoal() {
   const goal = app.project?.goalDaily || 0;
   const w = todayWritten();
   $('#goalText').textContent = goal ? `${fmt(w)} / ${fmt(goal)}자` : '목표 정하기';
   const r = app.todayRec || {};
-  $('#stToday').innerHTML = `오늘 <i class="sw s-add"></i>쓴 <b>${fmt(r.add || 0)}</b> <i class="sw s-rev"></i>고친 <b>${fmt(r.rev || 0)}</b> <i class="sw s-del"></i>지운 <b>${fmt(r.del || 0)}</b>`;
+  const all = addAll(r), typed = addTyped(r), other = app.settings.countPaste ? typed : all;
+  const note = all !== typed ? ` <small>(${app.settings.countPaste ? '직접 친 것' : '붙여넣기 포함'} ${fmt(other)})</small>` : '';
+  $('#stToday').innerHTML = `오늘 <i class="sw s-add"></i>쓴 <b>${fmt(addOf(r))}</b>${note} <i class="sw s-rev"></i>고친 <b>${fmt(r.rev || 0)}</b> <i class="sw s-del"></i>지운 <b>${fmt(r.del || 0)}</b>`;
   $('#goalBar').style.width = goal ? Math.min(100, (w / goal) * 100) + '%' : '0';
 }
 

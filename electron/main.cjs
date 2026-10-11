@@ -5,6 +5,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CSP } = require('./csp.cjs');
+const updater = require('./updater.cjs');
 
 const PORT = 47615;
 const ROOT = path.join(__dirname, '..', 'dist');
@@ -30,6 +31,7 @@ app.userAgentFallback = app.userAgentFallback.replace(/\s(Electron|novel-writer|
 
 let win = null;
 let ready = false; // 앱 화면이 다 떴는지
+let quitting = false; // 업데이트 설치로 끄는 중 (저장은 이미 마침)
 const pending = []; // 창이 준비되기 전에 들어온 파일
 
 function serve() {
@@ -64,6 +66,15 @@ function sendFile(p) {
 }
 
 // 앱 화면이 시작을 마치고 파일 받을 준비가 되면 알려 온다
+// 원고를 저장하고 끌 준비 (업데이트 설치 전)
+async function saveForQuit() {
+  if (win) await Promise.race([win.webContents.executeJavaScript('window.__saveBeforeClose ? window.__saveBeforeClose() : null').catch(() => {}), new Promise((r) => setTimeout(r, 8000))]);
+  quitting = true;
+}
+// 앱 화면의 '업데이트 확인' 메뉴
+ipcMain.handle('check-update', (e) => (isApp(e.senderFrame?.url) ? updater.check(true) : null));
+ipcMain.handle('app-version', (e) => (isApp(e.senderFrame?.url) ? app.getVersion() : null));
+
 ipcMain.on('renderer-ready', (e) => {
   if (!win || e.sender !== win.webContents || !isApp(e.senderFrame?.url)) return; // 앱 화면이 보낸 것만
   ready = true;
@@ -96,7 +107,7 @@ function createWindow() {
   let saved = false;
   win.webContents.on('will-prevent-unload', (e) => e.preventDefault());
   win.on('close', (e) => {
-    if (saved) return;
+    if (saved || quitting) return;
     e.preventDefault();
     const done = () => { saved = true; win.close(); };
     win.webContents.executeJavaScript('window.__saveBeforeClose ? window.__saveBeforeClose() : null').then(done, done);
@@ -133,6 +144,7 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d) => cb(OK.has(perm) && isApp(d?.requestingUrl || wc.getURL())));
     session.defaultSession.setPermissionCheckHandler((wc, perm, origin) => OK.has(perm) && isApp(origin));
     createWindow();
+    updater.start({ getWin: () => win, beforeQuit: saveForQuit });
     app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

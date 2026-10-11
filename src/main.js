@@ -8,13 +8,13 @@ import {
 import { runCommand, setSearch } from './editor.js';
 import { openRevision, closeRevision, isRevisionOpen, bindRevision, revisionOnChapterChange } from './revision.js';
 import * as F from './features.js';
-import { showStats } from './stats-view.js';
+import { showStats, showToday } from './stats-view.js';
 import { loadTemplates } from './layout.js';
 import { bindPageView, togglePageView, applyPageView, setZoom } from './pageview.js';
 import { showPageSetup } from './pagesetup.js';
 import { toggleBook, bindBook, isBookOpen } from './bookview.js';
 import { bindSafety, showRecovery, restoreFromTrash } from './safety.js';
-import { showFontDialog, showParaDialog, bindContextMenu, setSize, stepSize, showSizeInBox, speak, setSpacing, stepSpacing, showSpacingInBox, parseSpacing, bindHighlight } from './format.js';
+import { showFontDialog, showParaDialog, bindContextMenu, setSize, stepSize, showSizeInBox, speak, setSpacing, stepSpacing, showSpacingInBox, parseSpacing, bindHighlight, bindTextColor } from './format.js';
 import { $, $$, toast } from './ui.js';
 
 import * as A from './annotate.js';
@@ -22,6 +22,7 @@ import { bindKeys, showKeys } from './keys.js';
 import * as T from './tools.js';
 import * as R from './reader.js';
 const ACTIONS = {
+  checkUpdate: () => window.desktop?.checkUpdate?.(),
   readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(),
   annotate: () => A.addAnnotation(), index: () => A.showIndex(), keys: () => showKeys(), tidy: () => T.showTidy(), appear: () => T.showAppearances(),
   annoSide: () => { const nx = { right: 'left', left: 'off', off: 'right' }[app.settings.annoSide || 'right']; A.setAnnoSide(nx); toast({ right: '주석을 오른쪽 여백에 보여 줘요.', left: '주석을 왼쪽 여백에 보여 줘요.', off: '여백 주석을 숨겼어요. 주석 글자를 누르면 볼 수 있어요.' }[nx]); },
@@ -29,7 +30,7 @@ const ACTIONS = {
   export: F.showExport, print: async () => { await saveNow(); F.printBook(); }, backup: F.downloadBackup,
   revision: () => (isRevisionOpen() ? closeRevision() : openRevision()),
   focus: () => F.toggleFocus(), cork: () => { closeRevision(); F.toggleCork(); }, theme: toggleTheme, settings: F.showSettings,
-  find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, sprint: F.showSprint, snapshot: manualSnapshot,
+  find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, today: () => showToday(), sprint: F.showSprint, snapshot: manualSnapshot,
   pageView: () => togglePageView(), pageSetup: showPageSetup, fontDlg: () => showFontDialog(), paraDlg: () => showParaDialog(),
   recover: () => showRecovery(),
   book: () => { closeRevision(); toggleBook(); },
@@ -72,6 +73,7 @@ async function boot() {
   bindPageView();
   bindContextMenu();
   bindHighlight();
+  bindTextColor();
   R.bindReader();
   T.bindChapterGoal();
   A.bindAnnotations({ onNotesChange: () => { if (isTabOpen('notes')) F.renderNotes(); } });
@@ -84,6 +86,7 @@ async function boot() {
   if (G.status().connected) syncNow({ quiet: true });
   registerSW();
   // 다른 곳에서 넘겨받은 파일 열기: 데스크톱 앱(연결 프로그램), 설치한 웹앱(파일 연결)
+  if (window.desktop?.checkUpdate) { $('#mUpdate').hidden = false; window.desktop.version().then((v) => { if (v) $('#mVersion').textContent = `지금 ${v}`; }); }
   window.desktop?.onOpenFile(({ name, data }) => F.openFromFile(new File([data], name)));
   window.launchQueue?.setConsumer(async (p) => { for (const h of p.files || []) F.openFromFile(await h.getFile()); });
   window.__saveBeforeClose = async () => { await saveNow(); await flushSync(); };
@@ -132,7 +135,6 @@ function bind() {
   });
   $$('[data-ls]').forEach((b) => { b.addEventListener('mousedown', (e) => e.preventDefault()); b.addEventListener('click', () => stepSpacing(+b.dataset.ls)); });
   $$('[data-size]').forEach((b) => { b.addEventListener('mousedown', (e) => e.preventDefault()); b.addEventListener('click', () => stepSize(+b.dataset.size)); });
-  $('#textColor').addEventListener('input', (e) => { runCommand(app.editor, 'color', e.target.value); $('.color-btn span').style.borderColor = e.target.value; });
 
   // 제목
   $('#projectTitle').addEventListener('change', async (e) => {

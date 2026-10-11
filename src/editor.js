@@ -360,6 +360,11 @@ export function createEditor(el, { onUpdate, onSelection, smartQuotes, typewrite
 
 // 툴바 명령
 // 형광펜 색 (환경 설정에 기억)
+// 글자 색 견본 (Word·한글의 대표 색에 가깝게). 검정은 '기본 색'(테마 글자색)으로 대신한다
+export const TEXT_COLORS = [
+  ['#c0392b', '빨강'], ['#e67e22', '주황'], ['#b7950b', '겨자'], ['#27ae60', '초록'], ['#16a085', '청록'], ['#2e86c1', '파랑'], ['#1f3a93', '남색'],
+  ['#8e44ad', '보라'], ['#d6336c', '분홍'], ['#a0522d', '갈색'], ['#7b241c', '검붉은'], ['#5f5f5f', '진회색'], ['#9a9a9a', '회색'], ['#2c2c2c', '먹색'],
+];
 export const HL_COLORS = [['#fff2a8', '노랑'], ['#d6f5b8', '연두'], ['#cfe8ff', '하늘'], ['#ffd8e8', '분홍'], ['#ffdcb5', '주황'], ['#e6dcff', '보라'], ['#e2e2e2', '회색']];
 let hlPick = '#fff2a8';
 export const hlColor = () => hlPick;

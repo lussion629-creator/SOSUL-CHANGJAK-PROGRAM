@@ -1,6 +1,6 @@
 {
   "name": "novel-writer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "소설가를 위한 워드프로세서",
   "scripts": {
     "dev": "vite",
@@ -87,10 +87,21 @@
       "category": "public.app-category.productivity",
       "icon": "build/icon.png"
     },
-    "executableName": "NovelWriter"
+    "executableName": "NovelWriter",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "lussion629-creator",
+        "repo": "SOSUL-CHANGJAK-PROGRAM",
+        "releaseType": "release"
+      }
+    ]
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/lussion629-creator/SOSUL-CHANGJAK-PROGRAM.git"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.10"
   }
 }
