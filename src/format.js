@@ -369,7 +369,8 @@ export function bindContextMenu() {
       <hr>
       ${word ? `<button data-c="dict"><span>‘${h(word.slice(0, 12))}${word.length > 12 ? '…' : ''}’ 사전에서 찾기</span><small>표준국어대사전</small></button>` : ''}
       ${sel ? `<button data-c="find"><span>원고 전체에서 찾기</span></button>` : ''}
-      <button data-c="speak"><span>${sel ? '고른 부분' : '이 문단'} 소리 내어 읽기</span></button>
+      <button data-c="readHere"><span>${sel ? '고른 부분' : '여기부터'} AI로 읽어 주기</span><small>${kb('readAloud')}</small></button>
+      <button data-c="speak"><span>${sel ? '고른 부분' : '이 문단'} 기기 목소리로 읽기</span></button>
       ${sel ? `<button data-c="memo"><span>자료실에 메모로 남기기</span></button>` : ''}
       <hr>
       <button data-c="scene"><span>장면 전환 넣기 (* * *)</span></button>
@@ -404,6 +405,7 @@ export function bindContextMenu() {
     else if (c === 'dict') window.open(`https://stdict.korean.go.kr/search/searchResult.do?searchKeyword=${encodeURIComponent(menu.dataset.word)}`, '_blank', 'noopener');
     else if (c === 'find') { const { openFind } = await import('./features.js'); $('#findInput').value = sel.trim(); openFind(); }
     else if (c === 'speak') speak(sel || paragraphText());
+    else if (c === 'readHere') { const R = await import('./reader.js'); if (sel) { R.stop(); R.readAloud(); } else R.readFromHere(); }
     else if (c === 'memo') { const { editNote } = await import('./features.js'); editNote(null, { body: sel.trim() }); }
   });
   addEventListener('mousedown', (e) => { if (!menu.contains(e.target)) close(); });

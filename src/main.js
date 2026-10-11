@@ -20,7 +20,9 @@ import { $, $$, toast } from './ui.js';
 import * as A from './annotate.js';
 import { bindKeys, showKeys } from './keys.js';
 import * as T from './tools.js';
+import * as R from './reader.js';
 const ACTIONS = {
+  readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(),
   annotate: () => A.addAnnotation(), index: () => A.showIndex(), keys: () => showKeys(), tidy: () => T.showTidy(), appear: () => T.showAppearances(),
   annoSide: () => { const nx = { right: 'left', left: 'off', off: 'right' }[app.settings.annoSide || 'right']; A.setAnnoSide(nx); toast({ right: '주석을 오른쪽 여백에 보여 줘요.', left: '주석을 왼쪽 여백에 보여 줘요.', off: '여백 주석을 숨겼어요. 주석 글자를 누르면 볼 수 있어요.' }[nx]); },
   home: F.showHome, newProject: () => F.newProject(), open: F.openFromFile, importChapter: F.importChapter,
@@ -70,6 +72,7 @@ async function boot() {
   bindPageView();
   bindContextMenu();
   bindHighlight();
+  R.bindReader();
   T.bindChapterGoal();
   A.bindAnnotations({ onNotesChange: () => { if (isTabOpen('notes')) F.renderNotes(); } });
   bindSafety();
@@ -217,6 +220,7 @@ function bind() {
     addChapter: () => addChapter(), prevChapter: () => chapterStep(-1), nextChapter: () => chapterStep(1),
     speak: () => ACTIONS.speak(), sprint: () => ACTIONS.sprint(), index: () => A.showIndex(), keys: () => showKeys(),
     tidy: () => T.showTidy(), appear: () => T.showAppearances(), split: () => T.splitChapterAtCursor(),
+    readAloud: () => R.readAloud(), readNext: () => R.skip(1), readPrev: () => R.skip(-1), readStop: () => R.stop(), readSettings: () => R.showReaderSettings(),
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
