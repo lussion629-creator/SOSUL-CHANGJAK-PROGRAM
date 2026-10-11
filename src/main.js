@@ -42,7 +42,7 @@ const ACTIONS = {
   bookPlain: () => { closeRevision(); toggleBook(!(isBookOpen() && app.settings.bookNoCh), { noCh: true }); },
   bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
   lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1), lsReset: () => setSpacing(null), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
-  drive: F.showDrive, driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport,
+  drive: F.showDrive, driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport, storage: () => F.showStorage(),
   renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
   addChapter: () => addChapter(), addNote: () => F.editNote(null),
 };
@@ -70,7 +70,7 @@ async function boot() {
         '• 손을 멈추면 5초 뒤 자동 저장되고, 몇 분마다 버전이 쌓입니다. 왼쪽 ‘기록’ 탭에서 날짜·시간별로 돌아갈 수 있어요.\n' +
         '• 위의 ⇆(퇴고 모드)를 누르면 이전 버전과 지금 원고를 나란히 놓고 더한 곳(초록)·뺀 곳(빨강)을 봅니다. 양쪽을 ‘페이지’(PDF처럼)와 ‘편집’으로 바꿔 볼 수 있어요.\n' +
         '• 파일 → 파일 열기로 Word(docx), 한글(hwpx, hwp) 파일을 불러오고, 내보내기로 docx·hwpx·PDF로 저장합니다.\n' +
-        '• 도구 → 구글 드라이브 연결로 PC와 휴대폰 사이에 작품을 동기화합니다.\n' +
+        '• 설정 → 저장 방식에서 오프라인(이 기기에만) · 개인 서버 · 구글 드라이브 중 고르면, 서버나 드라이브로 데스크톱·노트북·휴대폰 사이에 작품을 이어 씁니다.\n' +
         '• 장면 전환은 ✱ 버튼, 집중 모드는 ◎ 버튼 또는 Ctrl+Shift+F.' });
       pid = p.id;
     }
@@ -94,6 +94,8 @@ async function boot() {
   F.bindCork();
   refreshSyncPill();
   if (syncBackend().status().connected) syncNow({ quiet: true });
+  // 처음 켤 때 한 번: 원고를 어디에 저장할지 (오프라인 · 개인 서버 · 구글 드라이브)
+  if (!app.settings.syncAsked) setTimeout(() => F.showStorage({ first: true }), 400);
   registerSW();
   // 다른 곳에서 넘겨받은 파일 열기: 데스크톱 앱(연결 프로그램), 설치한 웹앱(파일 연결)
   if (window.desktop?.checkUpdate) { $('#mUpdate').hidden = false; window.desktop.version().then((v) => { if (v) $('#mVersion').textContent = `지금 ${v}`; }); }

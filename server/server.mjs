@@ -244,7 +244,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return err(res, 405, 'method');
     if (!hasApp) {
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-      return res.end('소설 워드프로세서 동기화 서버가 켜져 있어요. 앱의 설정 → 동기화 서버 연결에 이 주소를 넣어 주세요.\n');
+      return res.end('소설 워드프로세서 동기화 서버가 켜져 있어요. 앱의 설정 → 저장 방식 → 개인 서버에 이 주소를 넣어 주세요.\n');
     }
     return await serveApp(req, res, url.pathname);
   } catch (e) {

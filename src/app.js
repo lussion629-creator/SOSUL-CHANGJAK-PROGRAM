@@ -15,7 +15,7 @@ import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, pr
 const DEFAULTS = {
   font: "'Gowun Batang', 'Nanum Myeongjo', Batang, serif", size: 17, lineHeight: 1.9, width: 720,
   indent: true, paraSpacing: 0, theme: 'auto', smartQuotes: true, typewriter: false, dimFocus: true,
-  snapshotMinutes: 3, autoSaveSeconds: 5, driveClientId: '', syncTarget: 'drive', syncServer: '', autoSync: true, syncMinutes: 5, author: '',
+  snapshotMinutes: 3, autoSaveSeconds: 5, driveClientId: '', syncTarget: 'drive', syncAsked: false, syncServer: '', autoSync: true, syncMinutes: 5, author: '',
 };
 
 export const app = {
@@ -806,9 +806,13 @@ function closeSidebarMobile() { if (matchMedia('(max-width: 820px)').matches) to
 // ---------- 자동 동기화 (구글 드라이브 또는 직접 띄운 동기화 서버) ----------
 // 자동 동기화: 저장할 때마다가 아니라 정해 둔 간격(기본 5분)에 한 번만 올린다.
 // 바뀐 게 없으면 올리지 않고, 창을 닫거나 다른 앱으로 넘어갈 때는 바로 올린다.
-// 둘 중 하나만 쓴다(settings.syncTarget). 작품에는 어디와 마지막으로 맞췄는지 따로 적어 둔다.
-export const usingServer = () => app.settings.syncTarget === 'server';
-export const syncBackend = () => (usingServer() ? SV : G);
+// 저장 방식(settings.syncTarget): 'off' 이 기기에만(오프라인) · 'server' 개인 서버 · 'drive' 구글 드라이브.
+// 작품에는 어디와 마지막으로 맞췄는지 따로 적어 둔다.
+const OFF = { status: () => ({ configured: false, connected: false, hadToken: false }) };
+export const syncTarget = () => (['off', 'server', 'drive'].includes(app.settings.syncTarget) ? app.settings.syncTarget : 'drive');
+export const usingServer = () => syncTarget() === 'server';
+export const isOffline = () => syncTarget() === 'off';
+export const syncBackend = () => (isOffline() ? OFF : usingServer() ? SV : G);
 const syncKey = () => (usingServer() ? 'srvSyncedAt' : 'syncedAt');
 export const syncedAtOf = (p) => p?.[syncKey()];
 let pushedAt = 0;
@@ -862,7 +866,7 @@ async function pullRemote(B, key, remote) {
 
 let syncing = false;
 export async function syncNow({ quiet = false } = {}) {
-  if (syncing || !app.project) return;
+  if (syncing || !app.project || isOffline()) return;
   syncing = true;
   const B = syncBackend();
   const key = syncKey();
@@ -908,6 +912,7 @@ export async function syncNow({ quiet = false } = {}) {
 export function refreshSyncPill() {
   const pill = $('#syncState');
   const shown = () => /동기화 중|\d 동기화/.test(pill.textContent); // 방금 동기화한 시각은 그대로 둔다
+  if (isOffline()) { pill.title = '이 기기에만 저장 (눌러서 저장 방식 바꾸기)'; setSyncState('', '⌂ 이 기기에만'); return; }
   if (usingServer()) {
     const st = SV.status();
     pill.title = '동기화 서버';

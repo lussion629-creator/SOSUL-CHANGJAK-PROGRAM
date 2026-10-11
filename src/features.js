@@ -4,7 +4,7 @@ import * as G from './gdrive.js';
 import * as SV from './syncserver.js';
 import {
   app, saveNow, openProject, openChapter, addChapter, renderBinder, saveSettings, applySettings, updateCounts,
-  todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, setSyncState, usingServer, bundleForSync, STATUS, projectTotal, beforeImport,
+  todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, setSyncState, usingServer, isOffline, syncTarget, bundleForSync, STATUS, projectTotal, beforeImport,
 } from './app.js';
 import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
@@ -42,7 +42,7 @@ export async function fillProjectMenu(m) {
     ${list.length > 12 ? `<button data-act="home"><span>다른 작품 ${list.length - 12}개 더 보기…</span></button>` : ''}
     <hr><button data-act="newProject"><span>새 작품 만들기…</span><small>제목 정하기</small></button>
     <button data-act="renameProject"><span>지금 작품 제목 바꾸기</span></button>
-    <button data-act="syncImport"><span>${usingServer() ? '동기화 서버' : '구글 드라이브'}에서 불러오기…</span></button>
+    ${isOffline() ? '' : `<button data-act="syncImport"><span>${usingServer() ? '개인 서버' : '구글 드라이브'}에서 불러오기…</span></button>`}
     <button data-act="open"><span>파일 열기…</span><small>hwpx·docx·pdf…</small></button>
     <button data-act="home"><span>작품 목록 관리…</span><small>삭제</small></button>`;
 }
@@ -541,11 +541,11 @@ export async function showDrive() {
         <select name="every" aria-label="올리는 간격">${[1, 5, 10, 30].map((m) => `<option value="${m}" ${+app.settings.syncMinutes === m ? 'selected' : ''}>${m}분마다</option>`).join('')}</select></div>
       <p class="hint" style="margin:0;line-height:1.6">작품마다 드라이브에 <b>파일 하나</b>만 두고 그 파일을 덮어씁니다. 새 파일이 쌓이지 않아요. 원고는 압축하고, 버전 기록은 앞 버전과 달라진 문단만 담아 올립니다. 이 기기에서 저장(5초)은 그대로 하고, 드라이브에는 위 간격과 창을 닫거나 다른 앱으로 넘어갈 때만 올립니다.${app.project.syncedSize ? ` 지금 이 작품 파일 크기: <b>${fmt(Math.max(1, Math.round(app.project.syncedSize / 1024)))}KB</b>` : ''}</p>`,
     buttons: st.connected
-      ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '동기화 서버로 바꾸기', value: 'server', left: true }, { label: '드라이브에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
-      : [{ label: '동기화 서버로 바꾸기', value: 'server', left: true }, { label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
+      ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '저장 방식 바꾸기…', value: 'choose', left: true }, { label: '드라이브에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
+      : [{ label: '저장 방식 바꾸기…', value: 'choose', left: true }, { label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
   });
   if (r.value === 'close') return;
-  if (r.value === 'server') { showServer(); return; }
+  if (r.value === 'choose') { showStorage(); return; }
   app.settings.driveClientId = r.form.cid.value.trim();
   app.settings.autoSync = r.form.auto.checked;
   app.settings.syncMinutes = +r.form.every.value || 5;
@@ -556,7 +556,7 @@ export async function showDrive() {
     try { await G.connect(); useTarget('drive'); toast('구글 드라이브에 연결했어요.'); await syncNow(); } catch (e) { toast('연결하지 못했습니다: ' + e.message, 7000); }
   } else if (r.value === 'sync') { useTarget('drive'); await syncNow(); }
   else if (r.value === 'import') await driveImport();
-  else if (r.value === 'off') { G.disconnect(); toast('연결을 끊었어요. 드라이브의 파일은 그대로 남습니다.'); }
+  else if (r.value === 'off') { G.disconnect(); useTarget('off'); toast('연결을 끊었어요. 이제 이 기기에만 저장합니다. 드라이브의 파일은 그대로 남아요.'); }
   refreshSyncPill();
 }
 
@@ -590,8 +590,41 @@ function useTarget(t) {
   setSyncState('', '');
   refreshSyncPill();
 }
-export const showSync = () => (usingServer() ? showServer() : showDrive());
-export const syncImport = () => (usingServer() ? serverImport() : driveImport());
+export const showSync = () => (isOffline() ? showStorage() : usingServer() ? showServer() : showDrive());
+export const syncImport = () => (isOffline() ? showStorage() : usingServer() ? serverImport() : driveImport());
+
+// ---------- 저장 방식 고르기: 처음 켤 때 한 번 묻고, 설정 → 저장 방식에서 언제든 바꾼다 ----------
+const STORAGE = [
+  { v: 'off', icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>', t: '오프라인 (이 기기에만)', d: '원고를 이 기기에만 저장해요. 인터넷이 없어도 되고 아무 데도 보내지 않아요. 옮길 때는 작품 백업 파일을 써요.' },
+  { v: 'server', icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>', t: '개인 서버', d: '내가 띄운 동기화 서버(내 컴퓨터·NAS·클라우드)에 맞춰 두고 데스크톱·노트북 어디서든 이어 써요. 서버 주소와 접속 암호가 필요해요.' },
+  { v: 'drive', icon: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h10a4 4 0 0 0 .6-7.95A6 6 0 0 0 6.1 9.2 4.5 4.5 0 0 0 7 18z"/></svg>', t: '구글 드라이브', d: '내 구글 드라이브에 작품을 올려 두고 다른 기기에서 이어 써요. 처음 한 번 구글 클라우드에서 클라이언트 ID를 만들어야 해요.' },
+];
+export async function showStorage({ first = false } = {}) {
+  // 처음 묻는 거라면, 이미 연결해 둔 곳을 미리 골라 둔다
+  const cur = !first ? syncTarget() : SV.status().configured ? 'server' : G.status().configured ? 'drive' : 'off';
+  const r = await dialog({
+    title: first ? '원고를 어디에 저장할까요?' : '저장 방식',
+    wide: true,
+    body: `<p style="margin:0;line-height:1.6">${first ? '처음 한 번만 물어볼게요. ' : ''}어느 쪽을 골라도 원고는 늘 이 기기에 먼저 저장돼요. 나중에 <b>설정 → 저장 방식</b>이나 오른쪽 위 저장 표시를 눌러 언제든 바꿀 수 있어요.</p>
+      <div class="st-opts" role="radiogroup" aria-label="저장 방식">${STORAGE.map((o) => `<label class="st-opt"><input type="radio" name="target" value="${o.v}" ${o.v === cur ? 'checked' : ''}><span class="st-ic" aria-hidden="true">${o.icon}</span><span class="st-tx"><b>${o.t}</b><small>${o.d}</small></span></label>`).join('')}</div>`,
+    buttons: first ? [{ label: '다음', value: 'ok', primary: true }] : [{ label: '취소', value: 'close' }, { label: '다음', value: 'ok', primary: true }],
+  });
+  if (first) { app.settings.syncAsked = true; saveSettings(); }
+  if (r.value !== 'ok') { if (first) useTarget('off'); refreshSyncPill(); return; }
+  const t = r.form.target.value;
+  if (t === 'off') {
+    const was = syncTarget();
+    useTarget('off');
+    if (!first && was !== 'off') toast('이제 이 기기에만 저장해요. 서버·드라이브에 올려 둔 작품은 그대로 남아요.');
+    else if (first) toast('이 기기에만 저장해요. 설정 → 저장 방식에서 언제든 바꿀 수 있어요.', 5000);
+    return;
+  }
+  // 서버·드라이브는 연결이 되면 그쪽으로 바뀐다. 이미 연결돼 있으면 바로 바꾼다.
+  const S2 = t === 'server' ? SV : G;
+  if (S2.status().connected) { useTarget(t); syncNow({ quiet: true }); }
+  else if (first && !S2.status().configured) useTarget('off'); // 연결을 마치기 전까지는 이 기기에만
+  if (t === 'server') await showServer(); else await showDrive();
+}
 
 // ---------- 동기화 서버 ----------
 export async function showServer() {
@@ -601,7 +634,7 @@ export async function showServer() {
   const url = st.url || here || app.settings.syncServer || '';
   const last = app.project.srvSyncedAt;
   const r = await dialog({
-    title: '동기화 서버 연결',
+    title: '개인 서버 연결',
     wide: true,
     body: `<p style="margin:0;line-height:1.6">직접 띄운 <b>동기화 서버</b>에 작품을 맞춰 두고, 데스크톱·노트북·휴대폰 어디서든 같은 작품을 이어 씁니다. 서버는 내 컴퓨터·NAS·클라우드 서버 어디에 띄워도 돼요.</p>
       ${on ? `<p class="pill ${st.error ? 'err' : 'ok'}" style="justify-self:start">${st.error ? h(st.error) : `연결됨 · ${last ? '마지막 동기화 ' + fullTime(Date.parse(last)) : '아직 동기화 전'}`}</p>` : ''}
@@ -621,8 +654,8 @@ export async function showServer() {
         <select name="every" aria-label="올리는 간격">${[1, 5, 10, 30].map((m) => `<option value="${m}" ${+app.settings.syncMinutes === m ? 'selected' : ''}>${m}분마다</option>`).join('')}</select></div>
       <p class="hint" style="margin:0;line-height:1.6">작품마다 서버에 <b>파일 하나</b>를 두고 덮어쓰며, 서버는 덮어쓰기 전 판을 몇 개 따로 남겨 둡니다. 다른 기기에서 먼저 올렸으면 그걸 받아 온 뒤 올리고, 이 기기에서 쓰던 원고는 버전 기록에 남아요. 접속 암호는 이 기기에만 저장되고 백업·동기화 파일에 들어가지 않아요.${app.project.srvSyncedSize ? ` 지금 이 작품 파일 크기: <b>${fmt(Math.max(1, Math.round(app.project.srvSyncedSize / 1024)))}KB</b>` : ''}</p>`,
     buttons: on
-      ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '구글 드라이브로 바꾸기', value: 'drive', left: true }, { label: '서버에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
-      : [{ label: '구글 드라이브로 바꾸기', value: 'drive', left: true }, { label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
+      ? [{ label: '연결 끊기', value: 'off', left: true }, { label: '저장 방식 바꾸기…', value: 'choose', left: true }, { label: '서버에서 불러오기', value: 'import' }, { label: '지금 동기화', value: 'sync', primary: true }]
+      : [{ label: '저장 방식 바꾸기…', value: 'choose', left: true }, { label: '닫기', value: 'close' }, { label: '저장하고 연결', value: 'connect', primary: true }],
     onOpen: (f) => {
       const out = $('#svOut');
       f.addEventListener('click', async (e) => {
@@ -634,7 +667,7 @@ export async function showServer() {
     },
   });
   if (r.value === 'close') return;
-  if (r.value === 'drive') { useTarget('drive'); showDrive(); return; }
+  if (r.value === 'choose') { showStorage(); return; }
   const f = r.form;
   const nextUrl = SV.normUrl(f.url.value);
   const typed = f.code.value.trim();
@@ -644,8 +677,8 @@ export async function showServer() {
   saveSettings();
   if (r.value === 'off') {
     SV.disconnect();
-    useTarget('drive');
-    toast('서버 연결을 끊었어요. 서버의 작품은 그대로 남습니다.');
+    useTarget('off');
+    toast('서버 연결을 끊었어요. 이제 이 기기에만 저장합니다. 서버의 작품은 그대로 남아요.');
     refreshSyncPill();
     return;
   }
@@ -671,7 +704,7 @@ export async function serverImport() {
     const files = await SV.listBundles();
     const here = new Set((await S.listProjects()).map((p) => p.id));
     const r = await dialog({
-      title: '동기화 서버에서 불러오기',
+      title: '개인 서버에서 불러오기',
       body: `<div class="proj-list">${files.map((f) => `<button class="proj" value="${h(f.id)}"><div class="info"><b>${h(f.name)}</b><small>${fullTime(Date.parse(f.modifiedTime))} 저장 · ${fmt(Math.max(1, Math.round((+f.size || 0) / 1024)))}KB${here.has(f.id) ? ' · 이 기기에도 있음' : ''}</small></div></button>`).join('') || '<p class="hint">서버에 올린 작품이 아직 없습니다.</p>'}</div>`,
       buttons: [{ label: '닫기', value: 'close' }],
     });

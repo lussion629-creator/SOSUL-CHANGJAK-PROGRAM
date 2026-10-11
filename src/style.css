@@ -278,7 +278,7 @@ dialog::backdrop { background: rgba(20, 15, 10, .35); }
 .fl-on[hidden], .fl-off[hidden] { display: none; }
 .check { display: flex; align-items: center; gap: 8px; }
 .proj-list { display: grid; gap: 8px; }
-.proj { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: var(--bg); }
+.proj { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: var(--paper); }
 .proj:hover { border-color: var(--accent); }
 .proj .info { flex: 1; min-width: 0; }
 .proj .info b { display: block; }
@@ -875,3 +875,13 @@ body.has-proof-rail.proof-right .paper-scroll { padding-right: 268px; }
 .tidy-mark-on { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
 .tidy-mark-on small { display: block; }
 @media print { .ProseMirror .tm { background: none; border: 0; } }
+
+/* 저장 방식 고르기 */
+.st-opts { display: grid; gap: 8px; }
+.st-opt { display: grid; grid-template-columns: auto 28px 1fr; align-items: start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: var(--paper); }
+.st-opt:hover { border-color: var(--accent); }
+.st-opt:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.st-opt input { margin-top: 3px; accent-color: var(--accent); }
+.st-ic { display: grid; place-items: center; color: var(--accent); }
+.st-tx { display: grid; gap: 3px; min-width: 0; }
+.st-tx small { color: var(--ink2); line-height: 1.55; font-size: 12.5px; }
