@@ -216,6 +216,7 @@ const side = () => app.settings.annoSide || 'right';
 function hot(id) {
   hotStyle.textContent = id ? `.ProseMirror .anno[data-anno="${id}"] { box-shadow: 0 2px 0 0 currentColor; background: var(--anno-hot); }` : '';
   rail?.querySelectorAll('.anno-card').forEach((c) => c.classList.toggle('hot', c.dataset.id === id));
+  board?.querySelectorAll('.sticky').forEach((c) => c.classList.toggle('hot', c.dataset.id === id));
 }
 function cardHtml(n) {
   const k = n.type;
@@ -234,7 +235,8 @@ function cardHtml(n) {
 
 let railTimer;
 export function scheduleRail(delay = 200) { clearTimeout(railTimer); railTimer = setTimeout(renderRail, delay); }
-export function renderRail() {
+export function renderRail() { drawRail(); renderStickies(); }
+function drawRail() {
   if (!rail || !app.editor) return;
   const scroll = $('#paperScroll');
   const ranges = annoRanges();
@@ -271,6 +273,111 @@ export function renderRail() {
     el.style.top = t + 'px';
     y = t + el.offsetHeight + 8;
   });
+}
+
+// ---------- 포스트잇 ----------
+// 여백 카드와 따로, 원고 종이 가장자리에 붙인 쪽지처럼 보여 준다. 끌어서 옮기고, 접어 둘 수 있다.
+let board;
+const STW = 168;
+const tilt = (id) => { let x = 0; for (const c of id) x = (x * 31 + c.charCodeAt(0)) % 997; return ((x % 7) - 3) * 0.6; };
+function stickyHtml(n) {
+  const k = n.type;
+  let main = '';
+  if (k === 'fix') main = `<div class="st-fix"><del>${h(n.quote || '')}</del> → <ins>${h(n.fix || '(지우기)')}</ins></div>`;
+  if (k === 'index') main = `<div class="st-term">${h(n.name || '')}</div>`;
+  if (k === 'cite') main = `<div class="st-src">${n.source ? h(n.source) : '<i>출처를 적어 두세요</i>'}</div>`;
+  if (n.body) main += `<div class="st-text">${h(n.body)}</div>`;
+  if (n.author) main += `<div class="st-who">${h(n.author)}</div>`;
+  return `<div class="sticky k-${k}${n.pinFold ? ' fold' : ''}" data-id="${n.id}" tabindex="0" style="--tilt:${tilt(n.id)}deg" title="끌어서 옮기기 · 두 번 누르면 고치기">
+    <div class="st-head"><span>${KINDS[k].name}</span><button type="button" data-s="fold" aria-label="${n.pinFold ? '펴기' : '접기'}">${n.pinFold ? '+' : '−'}</button></div>
+    <div class="st-body">${main}</div></div>`;
+}
+export function renderStickies() {
+  if (!board || !app.editor) return;
+  const on = !!app.settings.annoSticky && !document.body.classList.contains('focus');
+  const ranges = on ? annoRanges() : new Map();
+  const list = [...ranges].map(([id, r]) => ({ id, r, n: notes.get(id) })).filter((x) => x.n);
+  if (!list.length) { board.hidden = true; board.innerHTML = ''; return; }
+  board.hidden = false;
+  const scroll = $('#paperScroll'), paper = $('#paper');
+  const sr = scroll.getBoundingClientRect(), pr = paper.getBoundingClientRect();
+  const base = sr.top - scroll.scrollTop;
+  // 오른쪽 여백 카드가 있으면 종이 왼쪽 가장자리에, 아니면 오른쪽 가장자리에 반쯤 걸쳐 붙인다
+  const leftEdge = document.body.classList.contains('has-anno-rail') && side() === 'right';
+  let x0 = leftEdge ? pr.left - sr.left - STW * 0.55 : pr.right - sr.left - STW * 0.45;
+  x0 = Math.max(4, Math.min(x0, scroll.clientWidth - STW - 4)) + scroll.scrollLeft;
+  const view = app.editor.view;
+  const items = list.map((x) => {
+    let top = 0;
+    try { top = view.coordsAtPos(x.r.from).top - base - 6; } catch { /* 화면 밖 */ }
+    return { ...x, top };
+  }).sort((a, b) => a.top - b.top);
+  board.innerHTML = items.map((x) => stickyHtml(x.n)).join('');
+  let y = 0;
+  [...board.children].forEach((el, i) => {
+    const it = items[i], p = it.n.pin;
+    const t = Math.max(it.top, y);
+    el.dataset.x = x0; el.dataset.y = t;
+    el.style.left = Math.max(scroll.scrollLeft + 2, Math.min(x0 + (p?.dx || 0), scroll.scrollLeft + scroll.clientWidth - STW - 2)) + 'px';
+    el.style.top = t + (p?.dy || 0) + 'px';
+    if (!p) y = t + el.offsetHeight + 6; // 옮기지 않은 쪽지끼리는 겹치지 않게
+  });
+}
+export function setAnnoSticky(on) { app.settings.annoSticky = on; saveSettings(); renderRail(); }
+function bindStickies() {
+  let drag = null;
+  board.addEventListener('pointerdown', (e) => {
+    const el = e.target.closest('.sticky');
+    if (!el || e.button !== 0 || e.target.closest('button')) return;
+    drag = { el, sx: e.clientX, sy: e.clientY, l: parseFloat(el.style.left), t: parseFloat(el.style.top), moved: false };
+    el.setPointerCapture(e.pointerId);
+  });
+  board.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    drag.el.classList.add('dragging');
+    const sc = $('#paperScroll');
+    drag.el.style.left = Math.max(sc.scrollLeft + 2, Math.min(drag.l + dx, sc.scrollLeft + sc.clientWidth - STW - 2)) + 'px';
+    drag.el.style.top = drag.t + dy + 'px';
+  });
+  const end = async () => {
+    if (!drag) return;
+    const { el, moved } = drag;
+    drag = null;
+    el.classList.remove('dragging');
+    const n = notes.get(el.dataset.id);
+    if (!n) return;
+    if (!moved) { gotoAnno(n.id); return; }
+    n.pin = { dx: Math.round(parseFloat(el.style.left) - el.dataset.x), dy: Math.round(parseFloat(el.style.top) - el.dataset.y) };
+    await S.putNote(n);
+  };
+  board.addEventListener('pointerup', end);
+  board.addEventListener('pointercancel', end);
+  board.addEventListener('dblclick', (e) => { const el = e.target.closest('.sticky'); if (el && !e.target.closest('button')) editAnno(el.dataset.id); });
+  board.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-s="fold"]');
+    if (!b) return;
+    const n = notes.get(b.closest('.sticky').dataset.id);
+    if (!n) return;
+    n.pinFold = !n.pinFold;
+    if (!n.pinFold) delete n.pinFold;
+    await S.putNote(n);
+    renderStickies();
+  });
+  board.addEventListener('contextmenu', async (e) => {
+    const el = e.target.closest('.sticky');
+    if (!el) return;
+    e.preventDefault();
+    const n = notes.get(el.dataset.id);
+    if (!n?.pin) return;
+    delete n.pin; // 오른쪽 단추: 처음 자리로
+    await S.putNote(n);
+    renderStickies();
+  });
+  board.addEventListener('mouseover', (e) => { const c = e.target.closest('.sticky'); if (c) hot(c.dataset.id); });
+  board.addEventListener('mouseleave', () => hot(null));
 }
 
 // 좁은 화면: 주석 글자를 누르면 카드를 띄운다
@@ -313,6 +420,13 @@ export function bindAnnotations({ onNotesChange } = {}) {
   rail.setAttribute('aria-label', '주석');
   rail.hidden = true;
   scroll.appendChild(rail);
+  board = document.createElement('div');
+  board.className = 'sticky-board';
+  board.id = 'stickyBoard';
+  board.setAttribute('aria-label', '주석 포스트잇');
+  board.hidden = true;
+  scroll.appendChild(board);
+  bindStickies();
   hotStyle = document.createElement('style');
   document.head.appendChild(hotStyle);
   bindCardActions(rail);
@@ -331,6 +445,7 @@ export function bindAnnotations({ onNotesChange } = {}) {
     if (!el) return;
     const id = el.dataset.anno;
     if (!rail.hidden) { hot(id); rail.querySelector(`[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' }); }
+    else if (!board.hidden && board.querySelector(`[data-id="${id}"]`)) { hot(id); board.querySelector(`[data-id="${id}"]`).scrollIntoView({ block: 'nearest' }); }
     else popCard(id, e.clientX, e.clientY);
   });
   addEventListener('mousedown', (e) => { const p = $('#annoPop'); if (p && !p.contains(e.target) && !e.target.closest?.('.anno')) p.hidden = true; });

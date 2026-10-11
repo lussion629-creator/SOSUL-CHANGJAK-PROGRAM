@@ -7,7 +7,7 @@ import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { countHtml, countText, fmt } from './stats.js';
 import { parseHtml, sanitizeHtml } from './sanitize.js';
 import { chapterGoalHtml } from './goal.js';
-import { editAmounts, summarize, summaryLine, where, esc } from './diff.js';
+import { editAmounts, netAmounts, summarize, summaryLine, where, esc } from './diff.js';
 import { $, $$, h, toast, toastAction, hms, hm, dayLabel, dialog, confirmDlg, promptDlg } from './ui.js';
 
 const DEFAULTS = {
@@ -126,8 +126,9 @@ export async function saveNow({ snapshot = true, track = true } = {}) {
     const ch = app.chapters.get(app.cur);
     const newParas = docParagraphs(app.editor.state.doc).map((p) => p.text);
     let amounts = null;
+    const oldParas = ch._paras ?? htmlParagraphs(ch.html);
     if (track) {
-      try { amounts = editAmounts(ch._paras ?? htmlParagraphs(ch.html), newParas); } catch { /* 계산 실패는 기록만 건너뜀 */ }
+      try { amounts = editAmounts(oldParas, newParas); } catch { /* 계산 실패는 기록만 건너뜀 */ }
     }
     ch._paras = newParas;
     ch.html = app.editor.getHTML();
@@ -139,7 +140,7 @@ export async function saveNow({ snapshot = true, track = true } = {}) {
       app.project.lastChapter = ch.id;
       await S.putProject(app.project);
       if (snapshot) await maybeSnapshot(ch);
-      await updateDaily(amounts, ch.id);
+      await updateDaily(amounts, ch.id, oldParas, newParas);
       setSaveState('ok', `저장됨 ${hms(Date.now())}`);
       renderBinderCounts();
       app.hooks.afterSave.forEach((f) => f());
@@ -183,12 +184,13 @@ export function projectTotal() {
   for (const c of app.chapters.values()) n += c.id === app.cur ? currentCount().withSpace : (c._count ??= countHtml(c.html)).withSpace;
   return n;
 }
-async function updateDaily(amounts, chId) {
+async function updateDaily(amounts, chId, oldParas, newParas) {
   const total = projectTotal();
   const d = S.today();
   let rec = await S.getDaily(app.project.id, d);
-  if (!rec) rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total };
+  if (!rec) { rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total }; dropOldBases(); }
   rec.end = total;
+  if (newParas) await updateNet(rec, chId, oldParas, newParas);
   if (amounts) {
     // 붙여넣은 글자: 이번에 늘어난 쓴 양보다 많을 수는 없다 (붙여넣고 바로 되돌린 경우 등)
     const paste = Math.min(app.pastePending || 0, amounts.add);
@@ -204,6 +206,41 @@ async function updateDaily(amounts, chId) {
   await S.putDaily(rec);
   app.todayRec = rec;
   renderGoal();
+}
+
+// 전날(지난번) 원고 대비 순 변화: 오늘 처음 고치기 직전의 장 글을 기준으로 잡아 두고, 저장할 때마다 견준다.
+// 오늘 이미 고친 장인데 기준이 없으면(이 기능 전, 다른 기기) 오늘 0시 전 마지막 버전 기록을 기준으로 쓴다.
+async function updateNet(rec, chId, oldParas, newParas) {
+  rec.base ??= {};
+  rec.net ??= {};
+  if (rec.base[chId] === undefined) {
+    let base = oldParas;
+    const c = rec.byCh?.[chId];
+    if (c && (c.add || c.rev || c.del)) {
+      const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+      const snap = (await S.snapshotsOf(chId)).find((x) => x.time < midnight.getTime());
+      if (snap) base = htmlParagraphs(snap.html);
+    }
+    rec.base[chId] = base.join('\n');
+  }
+  try { rec.net[chId] = netAmounts(rec.base[chId] ? rec.base[chId].split('\n') : [], newParas); } catch { /* 계산 실패는 건너뜀 */ }
+}
+// 기준 글은 오늘 기록에만 둔다 (지난 기록에서는 지워 백업·동기화를 가볍게)
+async function dropOldBases() {
+  try {
+    for (const r of await S.dailyOf(app.project.id)) if (r.base && r.date !== S.today()) { delete r.base; await S.putDaily(r); }
+  } catch { /* 무시 */ }
+}
+// 오늘의 순 변화 합계. 오늘 지운 장은 기준 글 전체를 뺀 것으로 센다
+export function netToday(r = app.todayRec) {
+  const out = { plus: 0, minus: 0 };
+  if (!r?.base) return out;
+  for (const id of Object.keys(r.base)) {
+    if (!app.chapters.has(id)) { out.minus += r.base[id].replace(/\s/g, '').length; continue; }
+    const n = r.net?.[id];
+    if (n) { out.plus += n.plus; out.minus += n.minus; }
+  }
+  return out;
 }
 
 // ---------- 작품 열기 ----------
@@ -313,6 +350,7 @@ export async function resetToday() {
   const d = S.today();
   const old = (await S.getDaily(app.project.id, d)) || app.todayRec;
   const rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total, written: 0, add: 0, rev: 0, del: 0, paste: 0, byCh: {}, resetAt: Date.now() };
+  if (old?.base) { rec.base = structuredClone(old.base); rec.net = structuredClone(old.net || {}); } // 전날 대비는 초기화와 별개
   app.pastePending = 0;
   await S.putDaily(rec);
   app.todayRec = rec;
@@ -333,7 +371,9 @@ export function renderGoal() {
   const r = app.todayRec || {};
   const all = addAll(r), typed = addTyped(r), other = app.settings.countPaste ? typed : all;
   const note = all !== typed ? ` <small>(${app.settings.countPaste ? '직접 친 것' : '붙여넣기 포함'} ${fmt(other)})</small>` : '';
-  $('#stToday').innerHTML = `오늘 <i class="sw s-add"></i>쓴 <b>${fmt(addOf(r))}</b>${note} <i class="sw s-rev"></i>고친 <b>${fmt(r.rev || 0)}</b> <i class="sw s-del"></i>지운 <b>${fmt(r.del || 0)}</b>`;
+  const nt = netToday(r);
+  const net = r.base ? ` <span class="net" title="오늘 처음 고치기 전 원고(전날·지난번)와 견준 순 변화. 썼다가 지운 글자는 빠져요.">전날 대비 <b class="p">+${fmt(nt.plus)}</b> <b class="m">−${fmt(nt.minus)}</b></span>` : '';
+  $('#stToday').innerHTML = `오늘 <i class="sw s-add"></i>쓴 <b>${fmt(addOf(r))}</b>${note} <i class="sw s-rev"></i>고친 <b>${fmt(r.rev || 0)}</b> <i class="sw s-del"></i>지운 <b>${fmt(r.del || 0)}</b>${net}`;
   $('#goalBar').style.width = goal ? Math.min(100, (w / goal) * 100) + '%' : '0';
 }
 

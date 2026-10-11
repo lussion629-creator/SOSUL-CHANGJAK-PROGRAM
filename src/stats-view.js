@@ -1,6 +1,6 @@
 // 하루 기록 그래프: 날마다 쓴 양·고친 양·지운 양을 따로, 쌓아서, 또는 합산해서 본다
 import * as S from './store.js';
-import { app, saveNow, saveSettings, addOf, addAll, addTyped, resetToday, restoreToday, renderGoal } from './app.js';
+import { app, saveNow, saveSettings, addOf, addAll, addTyped, resetToday, restoreToday, renderGoal, netToday } from './app.js';
 import { fmt } from './stats.js';
 import { $, $$, h, dialog, toastAction, confirmDlg } from './ui.js';
 
@@ -191,6 +191,7 @@ export async function showToday() {
   await saveNow();
   const r = app.todayRec || {};
   const typed = addTyped(r), all = addAll(r), paste = all - typed;
+  const nt = netToday(r);
   const goal = app.project?.goalDaily || 0;
   const res = await dialog({
     title: '오늘 쓴 양',
@@ -200,6 +201,10 @@ export async function showToday() {
         <div class="stat"><b class="tn">${fmt(all)}</b><span>합계 (붙여넣기 포함)</span></div>
         <div class="stat"><b class="tn">${fmt(r.rev || 0)} · ${fmt(r.del || 0)}</b><span>고친 · 지운 글자</span></div>
       </div>
+      <fieldset class="today-net"><legend>전날(지난번) 원고 대비</legend>
+        ${r.base ? `<div class="row"><span><b class="p">+${fmt(nt.plus)}</b> 늘어남</span><span><b class="m">−${fmt(nt.minus)}</b> 줄어듦</span><span>순 <b>${nt.plus - nt.minus >= 0 ? '+' : '−'}${fmt(Math.abs(nt.plus - nt.minus))}</b>자</span></div>
+        <small class="hint">오늘 처음 고치기 직전 원고와 지금 원고를 견준 값이에요. 썼다가 오늘 다시 지운 글자는 양쪽에서 빠져요. 위의 쓴·고친·지운 합계와는 따로 셉니다.</small>` : '<small class="hint">오늘 아직 고친 장이 없어요.</small>'}
+      </fieldset>
       <fieldset class="today-mode"><legend>목표·그래프·연속 기록에 셀 양</legend>
         <label class="radio"><input type="radio" name="mode" value="typed" ${app.settings.countPaste ? '' : 'checked'}> 직접 친 글자만 <small>복사·붙여넣기, 끌어 놓기는 빼요</small></label>
         <label class="radio"><input type="radio" name="mode" value="all" ${app.settings.countPaste ? 'checked' : ''}> 붙여넣기까지 포함</label>

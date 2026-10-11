@@ -15,6 +15,7 @@ export const COMMANDS = [
   { id: 'find', label: '찾기', key: 'Ctrl+F', group: '편집' },
   { id: 'replace', label: '바꾸기', key: 'Ctrl+H', group: '편집' },
   { id: 'annotate', label: '주석 달기', key: 'Ctrl+Alt+M', group: '편집' },
+  { id: 'annoSticky', label: '주석 포스트잇 켜기/끄기', key: 'Ctrl+Alt+P', group: '편집' },
   { id: 'scene', label: '장면 전환 넣기 (* * *)', key: '', group: '편집' },
   { id: 'snapshot', label: '지금 버전 저장', key: '', group: '편집' },
   { id: 'bold', label: '굵게', key: 'Ctrl+B', group: '글자', editor: true },

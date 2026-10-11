@@ -137,6 +137,34 @@ export function editAmounts(oldParas, newParas) {
   return out;
 }
 
+/**
+ * 기준 원고(전날·지난번)와 지금 원고의 순 변화 (공백 제외 글자 수)
+ * - plus: 기준에 없던 글자, minus: 기준에서 없어진 글자. 썼다가 같은 날 지운 글자는 어느 쪽에도 안 남는다.
+ */
+export function netAmounts(oldParas, newParas) {
+  const n = (s) => s.replace(/\s/g, '').length;
+  const out = { plus: 0, minus: 0 };
+  const parts = diffArrays(oldParas, newParas);
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (!p.added && !p.removed) continue;
+    if (p.removed && parts[i + 1]?.added) {
+      const dels = p.value, adds = parts[i + 1].value;
+      i++;
+      for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
+        const a = dels[k], b = adds[k];
+        if (a === undefined) out.plus += n(b);
+        else if (b === undefined) out.minus += n(a);
+        else if (keepRatio(a, b) < 0.35) { out.minus += n(a); out.plus += n(b); }
+        else for (const t of diffArrays(tokenize(a), tokenize(b))) if (t.added) out.plus += n(t.value.join('')); else if (t.removed) out.minus += n(t.value.join(''));
+      }
+      continue;
+    }
+    for (const t of p.value) out[p.added ? 'plus' : 'minus'] += n(t);
+  }
+  return out;
+}
+
 // 옛 문단이 새 문단에 얼마나 남아 있는지 (문단이 길어지기만 했으면 1에 가깝다)
 function keepRatio(a, b) {
   const parts = diffArrays(tokenize(a), tokenize(b));
