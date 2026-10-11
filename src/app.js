@@ -27,12 +27,14 @@ export const app = {
   syncTimer: null,
   lastSnap: new Map(), // chapterId → 마지막 버전
   states: new Map(), // chapterId → EditorState (장마다 실행 취소 기록 유지)
-  hooks: { afterSave: [], afterOpen: [] },
+  hooks: { afterSave: [], afterOpen: [], clips: [] },
 };
 
 // ---------- 설정 ----------
 export function loadSettings() {
   try { Object.assign(app.settings, JSON.parse(localStorage.getItem('nw-settings') || '{}')); } catch { /* 무시 */ }
+  // 1.0.4: 복사·붙여넣기는 쓴·지운 양에서 빼는 것으로 한 번 되돌린다 (그 뒤로는 '오늘 쓴 양'에서 고른 대로)
+  if (!app.settings.clipV) { app.settings.countPaste = false; app.settings.clipV = 1; }
   applySettings();
 }
 export function saveSettings() {
@@ -66,14 +68,66 @@ export function initEditor() {
     smartQuotes: () => app.settings.smartQuotes,
     typewriter: () => app.settings.typewriter && document.body.classList.contains('focus'),
   });
-  // 붙여넣기·끌어 놓기로 들어온 글자 수를 세어 둔다 (오늘 쓴 양에서 따로 보여 주려고)
+  // 붙여넣기·끌어 놓기·잘라내기: 들어오고 나간 글자를 세어 쓴·지운 양에서 빼고, 내용은 클립보드 기록에 남긴다
   app.editor.on('transaction', ({ transaction: tr }) => {
     const ev = tr.getMeta('uiEvent');
-    if ((ev !== 'paste' && ev !== 'drop') || !tr.docChanged) return;
-    let n = 0;
-    for (const s of tr.steps) if (s.slice?.content) n += s.slice.content.textBetween(0, s.slice.content.size, '', '').replace(/\s/g, '').length;
-    app.pastePending = (app.pastePending || 0) + n;
+    if (!['paste', 'drop', 'cut'].includes(ev) || !tr.docChanged) return;
+    let ins = '', del = '';
+    tr.steps.forEach((st, i) => {
+      if (!st.slice) return; // 글자를 바꾸는 단계만 (꾸밈 단계 제외)
+      const d = tr.docs[i];
+      if (d && st.to > st.from) del += (del ? '\n' : '') + d.textBetween(st.from, st.to, '\n', '');
+      if (st.slice.content.size) ins += (ins ? '\n' : '') + st.slice.content.textBetween(0, st.slice.content.size, '\n', '');
+    });
+    app.pastePending = (app.pastePending || 0) + nsp(ins);
+    app.cutPending = (app.cutPending || 0) + nsp(del);
+    if (ev === 'cut') { if (del.trim()) logClip('cut', del); }
+    else if (ins.trim()) logClip(ev === 'drop' && del && nsp(del) === nsp(ins) ? 'move' : ev, ins, del);
   });
+  // 복사: 편집기가 받기 전에 고른 글자를 읽어 둔다
+  $('#editorHost').addEventListener('copy', () => {
+    const { from, to } = app.editor.state.selection;
+    const t = from === to ? '' : app.editor.state.doc.textBetween(from, to, '\n', '');
+    if (t.trim()) logClip('copy', t);
+  }, true);
+}
+
+// ---------- 클립보드 기록 ----------
+const nsp = (t) => (t || '').replace(/\s/g, '').length;
+const CLIP_MAX = 50000; // 한 번에 남기는 글자 (아주 긴 붙여넣기는 앞부분만)
+// 일일 기록을 읽고 쓰는 일은 한 줄로 세워 서로 덮어쓰지 않게 한다
+let dailyQ = Promise.resolve();
+function inDaily(fn) { const p = dailyQ.then(fn); dailyQ = p.catch(() => {}); return p; }
+async function dailyRec() {
+  const total = projectTotal();
+  const d = S.today();
+  let rec = await S.getDaily(app.project.id, d);
+  if (!rec) { rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total }; dropOldBases(); }
+  return rec;
+}
+// 클립보드 기록 지우기: t를 주면 그 하나, 안 주면 그날 것 모두
+export function removeClips(date, t = null) {
+  return inDaily(async () => {
+    const rec = await S.getDaily(app.project.id, date);
+    if (!rec?.clips) return;
+    rec.clips = t == null ? [] : rec.clips.filter((e) => e.t !== t);
+    await S.putDaily(rec);
+    if (date === S.today()) app.todayRec = rec;
+  });
+}
+export function logClip(k, text, replaced = '') {
+  if (!app.project || !app.cur) return;
+  const ch = app.cur, title = app.chapters.get(ch)?.title || '';
+  return inDaily(async () => {
+    const rec = await dailyRec();
+    const e = { t: Date.now(), k, ch, title, n: nsp(text), text: text.slice(0, CLIP_MAX) };
+    if (text.length > CLIP_MAX) e.cut = true;
+    if (replaced && k !== 'move') { e.rep = replaced.slice(0, CLIP_MAX); e.repN = nsp(replaced); }
+    (rec.clips ??= []).push(e);
+    await S.putDaily(rec);
+    app.todayRec = rec;
+    app.hooks.clips?.forEach((f) => f());
+  }).catch(() => {});
 }
 
 let tbRaf;
@@ -184,24 +238,24 @@ export function projectTotal() {
   for (const c of app.chapters.values()) n += c.id === app.cur ? currentCount().withSpace : (c._count ??= countHtml(c.html)).withSpace;
   return n;
 }
-async function updateDaily(amounts, chId, oldParas, newParas) {
+function updateDaily(...a) { return inDaily(() => writeDaily(...a)); }
+async function writeDaily(amounts, chId, oldParas, newParas) {
   const total = projectTotal();
-  const d = S.today();
-  let rec = await S.getDaily(app.project.id, d);
-  if (!rec) { rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total }; dropOldBases(); }
+  const rec = await dailyRec();
   rec.end = total;
   if (newParas) await updateNet(rec, chId, oldParas, newParas);
   if (amounts) {
-    // 붙여넣은 글자: 이번에 늘어난 쓴 양보다 많을 수는 없다 (붙여넣고 바로 되돌린 경우 등)
-    const paste = Math.min(app.pastePending || 0, amounts.add);
-    app.pastePending = 0;
-    for (const k of ['add', 'rev', 'del']) rec[k] = (rec[k] || 0) + amounts[k];
-    rec.paste = (rec.paste || 0) + paste;
+    // 붙여넣은 글자는 쓴 양(add)에 넣되 따로(paste) 적고, 넘치는 만큼은 고친 양에서 뺀다 (고른 글자 위에 붙여넣기).
+    // 잘라내기·붙여넣기로 없어진 글자는 지운 양에서 빼서 따로(cut) 적는다. 붙여넣고 바로 되돌린 경우 등을 생각해 이번 변화량을 넘지 않게.
+    const pasted = app.pastePending || 0, cut = app.cutPending || 0;
+    const pa = Math.min(pasted, amounts.add), pr = Math.min(pasted - pa, amounts.rev), cd = Math.min(cut, amounts.del);
+    const a = { add: amounts.add, rev: amounts.rev - pr, del: amounts.del - cd, paste: pa, pasteRev: pr, cut };
     rec.byCh ??= {};
     const c = (rec.byCh[chId] ??= { add: 0, rev: 0, del: 0 });
-    for (const k of ['add', 'rev', 'del']) c[k] += amounts[k];
-    c.paste = (c.paste || 0) + paste;
+    for (const k of Object.keys(a)) { rec[k] = (rec[k] || 0) + a[k]; c[k] = (c[k] || 0) + a[k]; }
   }
+  app.pastePending = 0;
+  app.cutPending = 0;
   rec.written = Math.max(rec.written || 0, total - rec.start);
   await S.putDaily(rec);
   app.todayRec = rec;
@@ -223,7 +277,23 @@ async function updateNet(rec, chId, oldParas, newParas) {
     }
     rec.base[chId] = base.join('\n');
   }
-  try { rec.net[chId] = netAmounts(rec.base[chId] ? rec.base[chId].split('\n') : [], newParas); } catch { /* 계산 실패는 건너뜀 */ }
+  try {
+    // 클립보드로 오간 글은 견주기 전에 양쪽에서 걷어 낸다:
+    // 기준 글에서는 잘라내거나(옮긴 것 포함) 붙여넣기로 덮어 없어진 글을, 지금 글에서는 붙여넣어 늘어난 글을.
+    let base = rec.base[chId], cur = newParas.join('\n');
+    const count = (hay, t) => hay.split(t).length - 1;
+    const drop = (hay, t, last) => { const k = last ? hay.lastIndexOf(t) : hay.indexOf(t); return k < 0 ? hay : hay.slice(0, k) + hay.slice(k + t.length); };
+    const clips = (rec.clips || []).filter((e) => e.ch === chId && !e.cut && e.k !== 'copy' && e.text?.trim());
+    for (const e of clips) {
+      if (e.k === 'cut') {
+        const moved = clips.some((x) => x.t > e.t && ['paste', 'drop'].includes(x.k) && x.text === e.text);
+        if (moved || count(base, e.text) > count(cur, e.text)) base = drop(base, e.text);
+      } else if (e.k === 'move') base = drop(base, e.text);
+      else if (e.rep?.trim() && count(base, e.rep) > count(cur, e.rep)) base = drop(base, e.rep);
+    }
+    for (const e of clips) if (e.k !== 'cut' && count(cur, e.text) > count(base, e.text)) cur = drop(cur, e.text, true);
+    rec.net[chId] = netAmounts(base ? base.split('\n') : [], cur.split('\n'));
+  } catch { /* 계산 실패는 건너뜀 */ }
 }
 // 기준 글은 오늘 기록에만 둔다 (지난 기록에서는 지워 백업·동기화를 가볍게)
 async function dropOldBases() {
@@ -338,30 +408,41 @@ export function updateCounts() {
 
 // 쓴 양: 새로 써 넣은 글자(공백 제외). 예전 기록에는 순증가분을 쓴다.
 // 설정(countPaste)에 따라 붙여넣은 글자를 빼거나 넣는다 (기본: 뺀다 = 직접 친 글자만)
-export const addAll = (r) => (r ? r.add ?? Math.max(0, (r.end || 0) - (r.start || 0)) : 0);
-export const addTyped = (r) => Math.max(0, addAll(r) - (r?.paste || 0));
+export const addAll = (r) => (r ? (r.add ?? Math.max(0, (r.end || 0) - (r.start || 0))) + (r.pasteRev || 0) : 0);
+export const addTyped = (r) => Math.max(0, addAll(r) - (r?.paste || 0) - (r?.pasteRev || 0));
 export const addOf = (r) => (app.settings.countPaste ? addAll(r) : addTyped(r));
+// 지운 양: 잘라내기·붙여넣기로 없어진 글자(cut)는 따로 둔다. '붙여넣기까지 포함'을 고르면 더한다
+export const delOf = (r) => (r?.del || 0) + (app.settings.countPaste ? r?.cut || 0 : 0);
 export const todayWritten = () => addOf(app.todayRec);
 
 // 오늘 기록 초기화 (이 작품). 되돌리기를 위해 이전 기록을 돌려준다
 export async function resetToday() {
   await saveNow();
-  const total = projectTotal();
-  const d = S.today();
-  const old = (await S.getDaily(app.project.id, d)) || app.todayRec;
-  const rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total, written: 0, add: 0, rev: 0, del: 0, paste: 0, byCh: {}, resetAt: Date.now() };
-  if (old?.base) { rec.base = structuredClone(old.base); rec.net = structuredClone(old.net || {}); } // 전날 대비는 초기화와 별개
-  app.pastePending = 0;
-  await S.putDaily(rec);
-  app.todayRec = rec;
-  renderGoal();
-  return old ? structuredClone(old) : null;
+  return inDaily(async () => {
+    const total = projectTotal();
+    const d = S.today();
+    const old = (await S.getDaily(app.project.id, d)) || app.todayRec;
+    const rec = { key: `${app.project.id}|${d}`, projectId: app.project.id, date: d, start: total, end: total, written: 0, add: 0, rev: 0, del: 0, paste: 0, cut: 0, byCh: {}, resetAt: Date.now() };
+    // 전날 대비와 클립보드 기록은 초기화와 별개
+    if (old?.base) { rec.base = structuredClone(old.base); rec.net = structuredClone(old.net || {}); }
+    if (old?.clips) rec.clips = structuredClone(old.clips);
+    app.pastePending = 0;
+    app.cutPending = 0;
+    await S.putDaily(rec);
+    app.todayRec = rec;
+    renderGoal();
+    return old ? structuredClone(old) : null;
+  });
 }
-export async function restoreToday(old) {
+export function restoreToday(old) {
   if (!old) return;
-  await S.putDaily(old);
-  app.todayRec = old;
-  renderGoal();
+  return inDaily(async () => {
+    const cur = await S.getDaily(old.projectId, old.date);
+    if (cur?.clips) old.clips = cur.clips; // 그사이 남은 클립보드 기록은 살린다
+    await S.putDaily(old);
+    app.todayRec = old;
+    renderGoal();
+  });
 }
 
 export function renderGoal() {
@@ -373,7 +454,7 @@ export function renderGoal() {
   const note = all !== typed ? ` <small>(${app.settings.countPaste ? '직접 친 것' : '붙여넣기 포함'} ${fmt(other)})</small>` : '';
   const nt = netToday(r);
   const net = r.base ? ` <span class="net" title="오늘 처음 고치기 전 원고(전날·지난번)와 견준 순 변화. 썼다가 지운 글자는 빠져요.">전날 대비 <b class="p">+${fmt(nt.plus)}</b> <b class="m">−${fmt(nt.minus)}</b></span>` : '';
-  $('#stToday').innerHTML = `오늘 <i class="sw s-add"></i>쓴 <b>${fmt(addOf(r))}</b>${note} <i class="sw s-rev"></i>고친 <b>${fmt(r.rev || 0)}</b> <i class="sw s-del"></i>지운 <b>${fmt(r.del || 0)}</b>${net}`;
+  $('#stToday').innerHTML = `오늘 <i class="sw s-add"></i>쓴 <b>${fmt(addOf(r))}</b>${note} <i class="sw s-rev"></i>고친 <b>${fmt(r.rev || 0)}</b> <i class="sw s-del"></i>지운 <b>${fmt(delOf(r))}</b>${net}`;
   $('#goalBar').style.width = goal ? Math.min(100, (w / goal) * 100) + '%' : '0';
 }
 

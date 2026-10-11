@@ -144,24 +144,22 @@ export function editAmounts(oldParas, newParas) {
 export function netAmounts(oldParas, newParas) {
   const n = (s) => s.replace(/\s/g, '').length;
   const out = { plus: 0, minus: 0 };
-  const parts = diffArrays(oldParas, newParas);
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i];
-    if (!p.added && !p.removed) continue;
-    if (p.removed && parts[i + 1]?.added) {
-      const dels = p.value, adds = parts[i + 1].value;
-      i++;
-      for (let k = 0; k < Math.max(dels.length, adds.length); k++) {
-        const a = dels[k], b = adds[k];
-        if (a === undefined) out.plus += n(b);
-        else if (b === undefined) out.minus += n(a);
-        else if (keepRatio(a, b) < 0.35) { out.minus += n(a); out.plus += n(b); }
-        else for (const t of diffArrays(tokenize(a), tokenize(b))) if (t.added) out.plus += n(t.value.join('')); else if (t.removed) out.minus += n(t.value.join(''));
-      }
-      continue;
-    }
-    for (const t of p.value) out[p.added ? 'plus' : 'minus'] += n(t);
+  const keep = (ps) => ps.filter((p) => p.trim()); // 빈 줄은 글자가 없고, 맞춰 보는 데 방해만 된다
+  const parts = diffArrays(keep(oldParas), keep(newParas));
+  // 같은 문단 사이의 바뀐 덩어리(지운 문단 + 새 문단)를 통째로 낱말 단위로 견준다.
+  // 문단을 옮기거나 합치거나 나눠도 실제로 바뀐 글자만 센다.
+  const flush = (a, b) => {
+    if (!a && !b) return;
+    if (a.length + b.length > 60000) { out.minus += n(a); out.plus += n(b); return; }
+    for (const t of diffArrays(tokenize(a), tokenize(b))) if (t.added) out.plus += n(t.value.join('')); else if (t.removed) out.minus += n(t.value.join(''));
+  };
+  let a = [], b = [];
+  for (const p of parts) {
+    if (p.added) b.push(...p.value);
+    else if (p.removed) a.push(...p.value);
+    else { flush(a.join('\n'), b.join('\n')); a = []; b = []; }
   }
+  flush(a.join('\n'), b.join('\n'));
   return out;
 }
 

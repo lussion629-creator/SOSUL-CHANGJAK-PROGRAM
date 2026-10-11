@@ -8,7 +8,7 @@ import {
 import { runCommand, setSearch } from './editor.js';
 import { openRevision, closeRevision, isRevisionOpen, bindRevision, revisionOnChapterChange } from './revision.js';
 import * as F from './features.js';
-import { showStats, showToday } from './stats-view.js';
+import { showStats, showToday, showClips } from './stats-view.js';
 import { loadTemplates } from './layout.js';
 import { bindPageView, togglePageView, applyPageView, setZoom } from './pageview.js';
 import { showPageSetup } from './pagesetup.js';
@@ -31,7 +31,7 @@ const ACTIONS = {
   export: F.showExport, print: async () => { await saveNow(); F.printBook(); }, backup: F.downloadBackup,
   revision: () => (isRevisionOpen() ? closeRevision() : openRevision()),
   focus: () => F.toggleFocus(), cork: () => { closeRevision(); F.toggleCork(); }, theme: toggleTheme, settings: F.showSettings,
-  find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, today: () => showToday(), sprint: F.showSprint, snapshot: manualSnapshot,
+  find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, today: () => showToday(), clips: () => showClips(), sprint: F.showSprint, snapshot: manualSnapshot,
   pageView: () => togglePageView(), pageSetup: showPageSetup, fontDlg: () => showFontDialog(), paraDlg: () => showParaDialog(),
   recover: () => showRecovery(),
   book: () => { closeRevision(); toggleBook(); },
