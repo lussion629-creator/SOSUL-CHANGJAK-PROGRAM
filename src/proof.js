@@ -1,10 +1,14 @@
 // 맞춤법·문장부호 교정: 틀리기 쉬운 곳에 물결 밑줄을 긋고, 누르면 고칠 말을 보여 준다.
-// 규칙(이 기기 안에서 바로) + AI 검사(Gemini 키가 있을 때, 장 하나씩). 켜고 끌 수 있다.
+// 규칙(이 기기 안에서 바로) + AI 맞춤법 검사(고른 AI로, 장 하나씩). 켜고 끌 수 있다.
+// 규칙마다 '자동 고침'(쓰다가 손을 떼면 알아서 고침) · '수동 고침'(밑줄과 왼쪽 여백 카드로 보여 주고 직접 고침) · '끄기'.
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
+import { closeHistory } from '@tiptap/pm/history';
 import * as S from './store.js';
 import { app, saveSettings } from './app.js';
-import { $, h, toast, dialog } from './ui.js';
+import { $, h, toast, toastAction, dialog } from './ui.js';
+import { scheduleRail } from './annotate.js';
+import { applyPageView, isPageView } from './pageview.js';
 import { askJSON, aiLabel, aiMissing, showAiSettings } from './ai.js';
 
 // ---------- 규칙 ----------
@@ -137,7 +141,20 @@ export const RULES = [
 
 // ---------- 설정 ----------
 export const isOn = () => app.settings.proof !== false;
-const offRules = () => new Set(app.settings.proofOff ?? RULES.filter((r) => r.off).map((r) => r.id));
+// 규칙마다 고치는 방식: 'auto' 자동 고침 · 'manual' 수동 고침 · 'off' 끄기
+// 처음에는 답이 하나뿐인 확실한 것만 자동으로
+const AUTO_DEF = new Set(['words', 'dwae', 'spaces', 'punctSpace', 'quoteInner']);
+export const MODES = [['auto', '자동 고침'], ['manual', '수동 고침'], ['off', '끄기']];
+export function modeOf(id) {
+  const m = app.settings.proofMode?.[id];
+  if (m) return m;
+  const r = RULES.find((x) => x.id === id);
+  if (app.settings.proofOff ? app.settings.proofOff.includes(id) : r?.off) return 'off'; // 예전 설정
+  return AUTO_DEF.has(id) ? 'auto' : 'manual';
+}
+function setMode(id, m) { (app.settings.proofMode ||= {})[id] = m; saveSettings(); recheck(); }
+const offRules = () => new Set(RULES.filter((r) => modeOf(r.id) === 'off').map((r) => r.id));
+const autoOn = () => app.settings.proofAuto !== false;
 const ignored = () => new Set(app.project?.proofIgnore || []);
 
 // 문단 하나 검사 (결과는 문단 노드마다 기억: 바뀌지 않은 문단은 다시 보지 않는다)
@@ -208,6 +225,8 @@ const plugin = new Plugin({
       if (!isOn()) return false;
       const hit = key.getState(view.state).deco.find(pos, pos).find((d) => d.from <= pos && pos <= d.to);
       if (!hit) { closePop(); return false; }
+      // 여백 카드가 보이면 그 카드에 불을 켜고, 아니면 작은 창을 띄운다
+      if (railEl && !railEl.hidden) { setTimeout(() => hotCard(hit.from), 0); return false; }
       setTimeout(() => openPop(view, hit.spec.issue, hit.from, hit.to, e), 0);
       return false;
     },
@@ -218,7 +237,9 @@ const plugin = new Plugin({
       clearTimeout(t);
       t = setTimeout(() => {
         if (view.composing) { kick(); return; }
-        if (isOn() && key.getState(view.state).stale !== false) view.dispatch(view.state.tr.setMeta(key, { recheck: true }).setMeta('addToHistory', false));
+        if (!isOn()) return;
+        view.dispatch(view.state.tr.setMeta(key, { recheck: true }).setMeta('addToHistory', false));
+        autoFix(view);
       }, 450);
     };
     kick();
@@ -230,6 +251,59 @@ export function recheck() {
   const ed = app.editor;
   if (!ed) return;
   ed.view.dispatch(ed.state.tr.setMeta(key, { recheck: true }).setMeta('addToHistory', false));
+  updateCount();
+  scheduleProofRail(60);
+}
+
+// ---------- 자동 고침 ----------
+// 쓰다가 손을 떼면, 커서가 닿아 있지 않은 곳만 고친다 (지금 쓰는 낱말은 건드리지 않게).
+// 고친 뒤 Ctrl+Z나 '되돌리기'로 되살린 낱말은 (같은 규칙으로) 다시 자동으로 고치지 않는다.
+// 되돌려진 자동 고침: '규칙|낱말'로 기억해 이번에는 다시 고치지 않는다
+const rejected = new Set();
+const rejKey = (x) => `${x.rule}|${x.word}`;
+let recent = []; // 최근 자동 고침 [{rule, word, from, time}] — 위치를 따라가다 되돌려지면 rejected로
+export function trackAuto(tr) {
+  if (!tr.docChanged || !recent.length) return;
+  recent = recent.map((r) => ({ ...r, from: tr.mapping.map(r.from, -1) })).filter((r) => Date.now() - r.time < 15 * 60e3);
+  if (!tr.getMeta('history$')) return;
+  const doc = tr.doc;
+  recent = recent.filter((r) => {
+    const back = r.from + r.word.length <= doc.content.size && doc.textBetween(r.from, r.from + r.word.length, '\n', '\ufffc') === r.word;
+    if (back) rejected.add(rejKey(r));
+    return !back;
+  });
+}
+export const autoLog = []; // 이번에 자동으로 고친 곳 [{time, from, to}]
+function autoFix(view) {
+  if (!isOn() || !autoOn() || view.composing) return;
+  const st = view.state, sel = st.selection;
+  const list = (key.getState(st).issues || []).filter((x) => !x.ai && x.fix.length === 1 && modeOf(x.rule) === 'auto'
+    && !(sel.from <= x.to + 1 && sel.to >= x.from - 1) && !rejected.has(rejKey(x)));
+  if (!list.length) return;
+  const tr = st.tr;
+  const done = [];
+  for (const x of [...list].sort((a, b) => b.from - a.from)) {
+    if (tr.doc.textBetween(x.from, x.to, '\n', '\ufffc') !== x.word) continue;
+    if (x.fix[0]) tr.insertText(x.fix[0], x.from, x.to); else tr.delete(x.from, x.to);
+    done.push(x);
+  }
+  if (!done.length) return;
+  closeHistory(tr); // 자동 고침은 Ctrl+Z 한 번으로 따로 되돌릴 수 있게
+  tr.setMeta(key, { recheck: true });
+  view.dispatch(tr);
+  view.dispatch(closeHistory(view.state.tr)); // 이어 쓰는 글과 섞이지 않게
+  const after = view.state.doc;
+  const show = (x) => `${x.word.trim() ? x.word : '빈칸'} → ${x.fix[0] === '' ? '(지움)' : x.fix[0].trim() ? x.fix[0] : '빈칸 하나'}`;
+  // 고친 자리를 기억해 둔다 (뒤에서부터 고쳤으니 앞 위치는 그대로, 뒤 위치는 지도 따라 옮긴다)
+  const m = tr.mapping;
+  done.forEach((x) => recent.push({ rule: x.rule, word: x.word, from: m.map(x.from, -1), time: Date.now() }));
+  recent.splice(0, Math.max(0, recent.length - 60));
+  done.reverse().forEach((x) => autoLog.unshift({ time: Date.now(), from: x.word, to: x.fix[0], why: x.why }));
+  autoLog.splice(50);
+  toastAction(`자동 고침: ${done.slice(0, 2).map(show).join(', ')}${done.length > 2 ? ` 외 ${done.length - 2}곳` : ''}`, '되돌리기', () => {
+    if (view.state.doc !== after) { toast('그 뒤로 글을 더 써서 Ctrl+Z로 되돌려 주세요.'); return; }
+    app.editor.commands.undo();
+  }, 5000);
   updateCount();
 }
 const current = () => (app.editor ? key.getState(app.editor.state)?.issues || [] : []);
@@ -255,13 +329,7 @@ async function ignore(x) {
   }
   recheck();
 }
-function ruleOff(id) {
-  const off = offRules();
-  off.add(id);
-  app.settings.proofOff = [...off];
-  saveSettings();
-  recheck();
-}
+const ruleOff = (id) => setMode(id, 'off');
 
 // ---------- 밑줄을 눌렀을 때 ----------
 let pop = null;
@@ -278,7 +346,7 @@ function openPop(view, x, from, to, e) {
     <div class="pp-word"><s>${h(x.word.trim() ? x.word : '빈칸')}</s></div>
     ${x.why ? `<p class="pp-why">${h(x.why)}</p>` : ''}
     <div class="pp-to">${x.fix.map((t, i) => `<button type="button" data-to="${i}" class="primary">${h(t === '' ? '지우기' : t.trim() ? t : '빈칸 하나로')}</button>`).join('')}</div>
-    <div class="pp-more"><button type="button" data-a="ign">${x.ai ? '이번만 무시' : '이 작품에서 무시'}</button>${rule ? `<button type="button" data-a="off" title="${h(rule.label)} 규칙 끄기">이 규칙 끄기</button>` : ''}<button type="button" data-a="list">목록</button></div>`;
+    <div class="pp-more"><button type="button" data-a="ign">${x.ai ? '이번만 무시' : '이 작품에서 무시'}</button>${rule && x.fix.length === 1 && modeOf(rule.id) !== 'auto' ? '<button type="button" data-a="auto" title="이 규칙에 걸리면 앞으로 자동으로 고쳐요">늘 자동으로</button>' : ''}${rule ? `<button type="button" data-a="off" title="${h(rule.label)} 규칙 끄기">이 규칙 끄기</button>` : ''}<button type="button" data-a="list">목록</button></div>`;
   document.body.append(pop);
   const r = view.coordsAtPos(from);
   const w = pop.offsetWidth, hh = pop.offsetHeight;
@@ -292,6 +360,7 @@ function openPop(view, x, from, to, e) {
     if (b.dataset.to != null) apply(cur, x.fix[+b.dataset.to]);
     else if (b.dataset.a === 'ign') ignore(x);
     else if (b.dataset.a === 'off') { ruleOff(x.rule); toast(`‘${rule.label}’ 규칙을 껐어요. 교정 목록에서 다시 켤 수 있어요.`); }
+    else if (b.dataset.a === 'auto') { apply(cur, x.fix[0]); setMode(x.rule, 'auto'); toast(`‘${rule.label}’은 앞으로 자동으로 고쳐요.`); }
     else if (b.dataset.a === 'list') showProof();
     closePop();
     app.editor.commands.focus();
@@ -306,10 +375,11 @@ export function setProof(on) {
   app.editor?.view.dom.setAttribute('spellcheck', on ? 'false' : 'true'); // 브라우저 밑줄과 겹치지 않게
   recheck();
   syncMenu();
+  scheduleProofRail(0);
 }
 export function toggleProof() {
   setProof(!isOn());
-  toast(isOn() ? '맞춤법·문장부호 교정을 켰어요. 밑줄을 누르면 고칠 말이 나와요.' : '맞춤법·문장부호 교정을 껐어요.');
+  toast(isOn() ? '맞춤법·문장부호 교정을 켰어요. 확실한 것은 자동으로 고치고, 나머지는 밑줄과 왼쪽 여백에 고칠 말을 보여 줘요.' : '맞춤법·문장부호 교정을 껐어요.');
 }
 function syncMenu() {
   document.querySelectorAll('[data-act=proof]').forEach((b) => b.classList.toggle('on', isOn()));
@@ -320,6 +390,7 @@ function updateCount() {
   const n = current().length;
   el.hidden = !isOn();
   el.textContent = n ? `교정 ${n}` : '교정 ✓';
+  scheduleProofRail();
   el.classList.toggle('has', n > 0);
   el.title = n ? `틀렸을 수 있는 곳 ${n}곳 · 눌러서 목록 보기` : '맞춤법·문장부호: 걸리는 곳이 없어요';
 }
@@ -390,19 +461,21 @@ export async function showProof() {
     wide: true,
     body: `<div class="proof">
       <div class="proof-top">
-        <label class="check"><input type="checkbox" name="on" ${isOn() ? 'checked' : ''}> <b>쓰는 동안 밑줄로 보여 주기</b> <small data-kbd="proof">Ctrl+Alt+K</small></label>
+        <label class="check"><input type="checkbox" name="on" ${isOn() ? 'checked' : ''}> <b>교정 모드</b> <small data-kbd="proof">Ctrl+Alt+K</small></label>
+        <label class="check"><input type="checkbox" name="auto" ${autoOn() ? 'checked' : ''}> 자동 고침 쓰기</label>
+        <label class="check"><input type="checkbox" name="rail" ${app.settings.proofRail !== false ? 'checked' : ''}> 왼쪽 여백에 고칠 말 보이기</label>
         <span class="grow"></span>
-        <button type="button" class="small" data-p="ai">AI로 이 장 꼼꼼히 검사</button>
-        <button type="button" class="small" data-p="fixall">제안대로 모두 고치기</button>
+        <button type="button" class="small" data-p="fixall">수동 고칠 곳 제안대로 모두 고치기</button>
       </div>
+      <div class="proof-ai"><button type="button" class="small" data-p="ai">AI 맞춤법 검사 (이 장)</button><span class="hint">AI가 맞춤법·띄어쓰기·문장부호 틀림만 찾아요. 문장·문체는 고치지 않아요.</span><span class="grow"></span><span class="ai-now">${h(aiLabel())}</span><button type="button" class="small ghost" data-p="aiset">바꾸기…</button></div>
       <p id="pfMsg" class="hint" aria-live="polite" style="margin:0"></p>
       <div id="pfList" class="proof-list"></div>
-      <details class="proof-rules"><summary>규칙 고르기 · 무시한 말</summary>
-        <div class="proof-rule-grid">${RULES.map((x) => `<label class="check"><input type="checkbox" data-rule="${x.id}" ${offRules().has(x.id) ? '' : 'checked'}> <span>${h(x.label)} <small class="hint">${h(x.hint)}</small></span></label>`).join('')}</div>
+      <details class="proof-rules" ${app.settings.proofRulesOpen ? 'open' : ''}><summary>규칙마다 자동 고침 · 수동 고침 · 끄기</summary>
+        <div class="proof-rule-grid">${RULES.map((x) => `<div class="proof-rule"><span>${h(x.label)} <small class="hint">${h(x.hint)}</small></span><select data-rule="${x.id}" aria-label="${h(x.label)}">${MODES.map(([v, l]) => `<option value="${v}" ${modeOf(x.id) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`).join('')}</div>
+        <p class="hint" style="margin:8px 0 0"><b>자동 고침</b>은 쓰다가 손을 떼면 알아서 고쳐요 (지금 쓰는 낱말은 건드리지 않고, Ctrl+Z로 되돌린 곳은 다시 고치지 않아요). <b>수동 고침</b>은 밑줄과 왼쪽 여백 카드로 보여 주고 직접 고쳐요. 고칠 말이 둘 이상이거나 AI가 찾은 곳은 늘 수동이에요.</p>
         <p class="hint" style="margin:6px 0 0">이 작품에서 무시한 말: <span id="pfIgn"></span></p>
+        <p class="hint" style="margin:6px 0 0">최근 자동으로 고친 곳: <span id="pfAuto"></span></p>
       </details>
-      <div class="ai-pick"><span>AI 검사 모델</span><b>${h(aiLabel())}</b><button type="button" class="small" data-p="aiset">바꾸기…</button></div>
-      <p class="hint" style="margin:0">자주 틀리는 맞춤법·띄어쓰기와 문장부호는 이 기기 안에서 바로 찾아요. 더 꼼꼼히 보려면 ‘AI로 검사’를 눌러 주세요. Gemini·GPT·Claude 중에서 고를 수 있어요.</p>
     </div>`,
     buttons: [{ label: 'AI', value: 'aiset' }, { label: '닫기', value: 'close', primary: true }],
     onOpen: (f) => {
@@ -426,17 +499,17 @@ export async function showProof() {
               ${x.why ? `<small class="pf-why">${h(x.why)}</small>` : ''}</div>`).join('')
           : `<p class="proof-empty">${isOn() ? '걸리는 곳이 없어요.' : '교정이 꺼져 있어요.'}</p>`;
         $('#pfIgn').textContent = (app.project.proofIgnore || []).map((x) => x.split(':').slice(1).join(':')).join(', ') || '없음';
+        $('#pfAuto').textContent = autoLog.slice(0, 12).map((x) => `${x.from.trim() || '빈칸'}→${x.to === '' ? '(지움)' : x.to.trim() || '빈칸'}`).join(', ') || '없음';
         f._list = list;
       };
       draw();
       f.addEventListener('change', (e) => {
         if (e.target.name === 'on') { setProof(e.target.checked); draw(); }
-        if (e.target.dataset.rule) {
-          const off = offRules();
-          if (e.target.checked) off.delete(e.target.dataset.rule); else off.add(e.target.dataset.rule);
-          app.settings.proofOff = [...off]; saveSettings(); recheck(); draw();
-        }
+        if (e.target.name === 'auto') { app.settings.proofAuto = e.target.checked; saveSettings(); }
+        if (e.target.name === 'rail') { app.settings.proofRail = e.target.checked; saveSettings(); scheduleProofRail(0); }
+        if (e.target.dataset.rule) { setMode(e.target.dataset.rule, e.target.value); draw(); }
       });
+      f.querySelector('.proof-rules').addEventListener('toggle', (e) => { app.settings.proofRulesOpen = e.target.open; saveSettings(); });
       f.addEventListener('click', async (e) => {
         const b = e.target.closest('[data-a], [data-p]');
         if (!b) return;
@@ -468,9 +541,9 @@ export async function showProof() {
           if (miss) { msg.textContent = miss; return; }
           busy?.abort(); busy = new AbortController();
           b.disabled = true;
-          msg.textContent = 'AI가 읽는 중…';
+          msg.textContent = 'AI가 맞춤법·띄어쓰기·문장부호를 보는 중…';
           try {
-            const ai = await aiCheck({ signal: busy.signal, onProgress: (k, n) => { msg.textContent = n > 1 ? `AI가 읽는 중… (${k + 1}/${n})` : 'AI가 읽는 중…'; } });
+            const ai = await aiCheck({ signal: busy.signal, onProgress: (k, n) => { msg.textContent = `AI가 맞춤법·띄어쓰기·문장부호를 보는 중…${n > 1 ? ` (${k + 1}/${n})` : ''}`; } });
             app.editor.view.dispatch(app.editor.state.tr.setMeta(key, { ai }));
             updateCount(); draw();
             msg.textContent = ai.length ? `AI가 ${ai.length}곳을 더 찾았어요 (‘AI’ 표시). 맞는지 한 번씩 확인해 주세요.` : 'AI가 더 찾은 곳은 없어요.';
@@ -484,15 +557,117 @@ export async function showProof() {
   if (r.value === 'aiset') await showAiSettings({ back: () => showProof() });
 }
 
+// ---------- 왼쪽 여백 카드 (색인처럼) ----------
+// 교정 모드에서 걸린 곳마다 그 줄 옆에 '틀린 말 → 고칠 말' 카드를 세운다. 주석 여백이 왼쪽이면 오른쪽에.
+let railEl = null, railT = null, railItems = [];
+const RAIL_W = 232, RAIL_MAX = 200;
+export function scheduleProofRail(d = 150) { clearTimeout(railT); railT = setTimeout(drawProofRail, d); }
+const vis = (t) => (t === '' ? '(지움)' : t.trim() ? t : '␣');
+function cardHtml(x, i) {
+  const rule = RULES.find((r) => r.id === x.rule);
+  const auto = rule && !x.ai && x.fix.length === 1 && modeOf(rule.id) === 'auto' && autoOn() && !rejected.has(rejKey(x));
+  const fix = x.fix.length === 1
+    ? `<div class="pc-fix"><del>${h(vis(x.word))}</del> → <ins>${h(vis(x.fix[0]))}</ins></div>`
+    : x.fix.length ? `<div class="pc-fix"><del>${h(vis(x.word))}</del> → ${x.fix.map((t) => `<ins>${h(vis(t))}</ins>`).join(' 또는 ')}</div>`
+      : `<div class="pc-fix"><del>${h(vis(x.word))}</del></div>`;
+  return `<div class="pf-card pc-${x.kind}${x.ai ? ' pc-ai' : ''}" data-i="${i}" tabindex="0" title="눌러서 원고에서 보기">
+    <div class="pc-head"><span class="pc-k">${h(kindName(x))}</span>${auto ? '<span class="pc-auto" title="손을 떼고 커서가 떠나면 자동으로 고쳐요">자동</span>' : ''}</div>
+    ${fix}${x.why ? `<div class="pc-why">${h(x.why)}</div>` : ''}
+    <div class="pc-acts">${x.fix.map((t, k) => `<button type="button" data-a="fix" data-k="${k}"${k === 0 ? ' class="go"' : ''}>${x.fix.length > 1 ? h(vis(t)) + '로' : '고치기'}</button>`).join('')}<button type="button" data-a="ign" title="${x.ai ? '이번만 무시' : '이 작품에서 무시'}">무시</button></div></div>`;
+}
+function drawProofRail() {
+  if (!railEl || !app.editor) return;
+  const scroll = $('#paperScroll');
+  const body = document.body;
+  const list = isOn() && app.settings.proofRail !== false ? current() : [];
+  const annoRail = body.classList.contains('has-anno-rail');
+  const right = annoRail && body.classList.contains('anno-left');
+  const need = annoRail ? 1120 : 860;
+  const on = list.length > 0 && !body.classList.contains('focus') && !body.classList.contains('revising') && scroll.clientWidth >= need;
+  const was = body.classList.contains('has-proof-rail') + (body.classList.contains('proof-right') ? 2 : 0);
+  body.classList.toggle('has-proof-rail', on);
+  body.classList.toggle('proof-right', on && right);
+  const now = on + (on && right ? 2 : 0);
+  if (was !== now) { scheduleRail(30); if (isPageView()) { applyPageView(); scheduleProofRail(80); return; } }
+  if (!on) { railEl.hidden = true; railEl.innerHTML = ''; railItems = []; return; }
+  railEl.hidden = false;
+  const paper = $('#paper');
+  const base = scroll.getBoundingClientRect().top - scroll.scrollTop;
+  const pr = paper.getBoundingClientRect(), sr = scroll.getBoundingClientRect();
+  railEl.style.width = RAIL_W + 'px';
+  railEl.style.left = (right ? pr.right - sr.left + 20 : Math.max(8, pr.left - sr.left - RAIL_W - 20)) + scroll.scrollLeft + 'px';
+  const view = app.editor.view;
+  railItems = list.slice(0, RAIL_MAX).map((x) => {
+    let top = 0;
+    try { top = view.coordsAtPos(x.from).top - base; } catch { /* 화면 밖 */ }
+    return { ...x, top };
+  });
+  railEl.innerHTML = `<div class="pc-title">교정 ${list.length}곳${autoOn() ? '' : ' · 자동 고침 꺼짐'}<button type="button" data-a="list">목록</button></div>`
+    + railItems.map(cardHtml).join('')
+    + (list.length > RAIL_MAX ? `<div class="pf-card pc-more" data-a="list">그 밖에 ${list.length - RAIL_MAX}곳 · 목록에서 보기</div>` : '');
+  const cards = [...railEl.querySelectorAll('.pf-card')];
+  const head = railEl.querySelector('.pc-title');
+  head.style.top = Math.max(0, (railItems[0]?.top ?? 0) - head.offsetHeight - 8) + 'px';
+  let y = 0;
+  cards.forEach((el, i) => {
+    const t = Math.max(railItems[i]?.top ?? y, y);
+    el.style.top = t + 'px';
+    y = t + el.offsetHeight + 6;
+  });
+  hotCard(app.editor.state.selection.from, false);
+}
+function hotCard(pos, scrollTo = true) {
+  if (!railEl || railEl.hidden) return;
+  let hit = -1;
+  railItems.forEach((x, i) => { if (hit < 0 && x.from <= pos && pos <= x.to) hit = i; });
+  railEl.querySelectorAll('.pf-card.hot').forEach((c) => c.classList.remove('hot'));
+  if (hit < 0) return;
+  const c = railEl.querySelector(`.pf-card[data-i="${hit}"]`);
+  c?.classList.add('hot');
+  if (scrollTo) c?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+function bindRail() {
+  railEl = document.createElement('aside');
+  railEl.className = 'proof-rail';
+  railEl.id = 'proofRail';
+  railEl.setAttribute('aria-label', '맞춤법·문장부호 교정');
+  railEl.hidden = true;
+  $('#paperScroll').appendChild(railEl);
+  railEl.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+  railEl.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-a=list]')) { showProof(); return; }
+    const card = e.target.closest('.pf-card');
+    const x = card && railItems[+card.dataset.i];
+    if (!x) return;
+    const b = e.target.closest('button');
+    if (b?.dataset.a === 'fix') { apply(x, x.fix[+b.dataset.k]); app.editor.commands.focus(); return; }
+    if (b?.dataset.a === 'ign') { await ignore(x); return; }
+    app.editor.chain().focus().setTextSelection({ from: x.from, to: x.to }).scrollIntoView().run();
+  });
+  railEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.classList.contains('pf-card')) e.target.click(); });
+  app.editor.on('update', () => scheduleProofRail(250));
+  app.editor.on('selectionUpdate', () => hotCard(app.editor.state.selection.from, false));
+  addEventListener('resize', () => scheduleProofRail(100));
+  // 주석 여백이 생기거나 옮겨지면 다시 놓는다
+  let sig = '';
+  new MutationObserver(() => {
+    const b = document.body.classList;
+    const n = `${b.contains('has-anno-rail')}${b.contains('anno-left')}${b.contains('focus')}${b.contains('revising')}${b.contains('pageview')}`;
+    if (n !== sig) { sig = n; scheduleProofRail(60); }
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+
 // ---------- 시작 ----------
 export function bindProof() {
   app.editor.registerPlugin(plugin);
+  bindRail();
   app.editor.view.dom.setAttribute('spellcheck', isOn() ? 'false' : 'true');
-  app.editor.on('transaction', ({ transaction }) => { if (transaction.getMeta(key)) updateCount(); });
+  app.editor.on('transaction', ({ transaction }) => { trackAuto(transaction); if (transaction.getMeta(key)) updateCount(); });
   app.hooks.afterOpen.push(() => {
     closePop();
     app.editor.view.dispatch(app.editor.state.tr.setMeta(key, { clearAi: true }).setMeta('addToHistory', false));
     updateCount();
+    scheduleProofRail(80);
   });
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && pop) closePop(); });
   addEventListener('mousedown', (e) => { if (pop && !pop.contains(e.target) && !e.target.closest?.('.pf')) closePop(); }, true);

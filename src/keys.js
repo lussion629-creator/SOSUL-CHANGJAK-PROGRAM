@@ -17,7 +17,7 @@ export const COMMANDS = [
   { id: 'annotate', label: '주석 달기', key: 'Ctrl+Alt+M', group: '편집' },
   { id: 'annoSticky', label: '주석 포스트잇 켜기/끄기', key: 'Ctrl+Alt+P', group: '편집' },
   { id: 'proof', label: '맞춤법·문장부호 교정 켜기/끄기', key: 'Ctrl+Alt+K', group: '편집' },
-  { id: 'proofList', label: '교정 목록·AI 검사', key: '', group: '편집' },
+  { id: 'proofList', label: '교정 목록·AI 맞춤법 검사', key: '', group: '편집' },
   { id: 'scene', label: '장면 전환 넣기 (* * *)', key: '', group: '편집' },
   { id: 'snapshot', label: '지금 버전 저장', key: '', group: '편집' },
   { id: 'bold', label: '굵게', key: 'Ctrl+B', group: '글자', editor: true },

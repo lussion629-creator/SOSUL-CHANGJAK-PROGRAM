@@ -1,4 +1,4 @@
-// 글 AI: 대사 판정·인물 찾기·AI 교정에 쓰는 글 모델. Google Gemini · OpenAI GPT · Anthropic Claude 중에서 고른다.
+// 글 AI: 대사 판정·인물 찾기·AI 맞춤법 검사에 쓰는 글 모델. Google Gemini · OpenAI GPT · Anthropic Claude 중에서 고른다.
 // 키는 회사마다 이 기기에만 저장한다 (백업 파일·드라이브 동기화·설정에 들어가지 않는다). Gemini 키는 낭독과 같은 키.
 import { app, saveSettings } from './app.js';
 import { $, h, toast, dialog } from './ui.js';
@@ -185,7 +185,7 @@ export async function showAiSettings({ back } = {}) {
   const r = await dialog({
     title: 'AI 글 모델',
     body: `<div class="rd-set ai-set">
-      <p class="hint" style="margin:0">낭독할 때 <b>대사마다 누가 말했는지 판정</b>하고, <b>등장인물을 찾고</b>, <b>AI 교정</b>을 할 때 쓰는 모델이에요. 음성은 그대로 Gemini가 만들어요.</p>
+      <p class="hint" style="margin:0">낭독할 때 <b>대사마다 누가 말했는지 판정</b>하고, <b>등장인물을 찾고</b>, <b>AI 맞춤법 검사</b>(맞춤법·띄어쓰기·문장부호 틀림 찾기)를 할 때 쓰는 모델이에요. 음성은 그대로 Gemini가 만들어요.</p>
       <div class="seg seg-lg ai-prov" role="radiogroup" aria-label="AI 회사">${Object.entries(PROVIDERS).map(([p, P]) => `<label><input type="radio" name="provider" value="${p}" ${p === cur ? 'checked' : ''}><span>${h(P.label)}</span></label>`).join('')}</div>
       ${Object.keys(PROVIDERS).map(panel).join('')}
       <div class="ai-test"><button type="button" class="small" data-a="test">연결 시험</button><span id="aiOut" class="hint" aria-live="polite"></span></div>

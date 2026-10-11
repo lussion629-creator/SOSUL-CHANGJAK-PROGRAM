@@ -792,7 +792,7 @@ body.focus .sticky-board { display: none; }
 .pf-row .pf-why { grid-column: 2 / -1; color: var(--ink3); font-size: 12px; margin-top: -2px; }
 .proof-empty { margin: 0; padding: 28px 12px; text-align: center; color: var(--ink3); }
 .proof-rules summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
-.proof-rule-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 16px; margin-top: 10px; }
+.proof-rule-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 4px 20px; margin-top: 10px; }
 @media (max-width: 560px) {
   .pf-row { grid-template-columns: minmax(0, 1fr) auto; }
   .pf-row .pf-k { grid-column: 1 / -1; }
@@ -818,3 +818,35 @@ body.focus .sticky-board { display: none; }
 .ai-pick b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .ai-pick button { margin-left: auto; }
 .hint a, .field small a { color: var(--accent); }
+
+/* 교정 여백 카드 (왼쪽, 주석 여백이 왼쪽이면 오른쪽) */
+body.has-proof-rail:not(.proof-right) .paper-scroll { padding-left: 268px; }
+body.has-proof-rail.proof-right .paper-scroll { padding-right: 268px; }
+.proof-rail { position: absolute; top: 0; z-index: 3; }
+.proof-rail .pc-title { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--ink3); letter-spacing: .02em; }
+.proof-rail .pc-title button { margin-left: auto; background: none; border: 0; color: var(--ink3); font-size: 11.5px; padding: 2px 6px; border-radius: 5px; }
+.proof-rail .pc-title button:hover { background: var(--bg2); color: var(--ink); }
+.pf-card { position: absolute; left: 0; right: 0; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--pc); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; line-height: 1.5; box-shadow: var(--shadow); cursor: pointer; transition: top .15s; --pc: var(--del); }
+.pf-card.pc-pn { --pc: var(--s-add); }
+.pf-card.pc-ai { border-left-style: dashed; }
+.pf-card.hot, .pf-card:focus-visible { outline: 2px solid var(--pc); outline-offset: 1px; }
+.pc-head { display: flex; gap: 6px; align-items: center; margin-bottom: 2px; }
+.pc-k { font-weight: 700; color: var(--pc); font-size: 11px; }
+.pc-auto { margin-left: auto; font-size: 10.5px; color: var(--ink3); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.pc-fix { font-family: var(--ed-font); font-size: 14px; color: var(--ink); overflow-wrap: anywhere; }
+.pc-fix del { color: var(--del); background: var(--del-bg); text-decoration: line-through; border-radius: 2px; padding: 0 2px; }
+.pc-fix ins { color: var(--ins); background: var(--ins-bg); text-decoration: none; border-radius: 2px; padding: 0 2px; font-weight: 600; }
+.pc-why { color: var(--ink3); font-size: 11.5px; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pf-card.hot .pc-why { -webkit-line-clamp: unset; }
+.pc-acts { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
+.pc-acts button { font-size: 11.5px; padding: 2px 8px; border: 1px solid var(--line); background: var(--paper); border-radius: 5px; color: var(--ink2); }
+.pc-acts button.go { border-color: var(--ins); color: var(--ins); font-weight: 600; }
+.pc-acts button:hover { background: var(--bg2); }
+.pf-card.pc-more { color: var(--ink2); text-align: center; border-left-color: var(--line); }
+.proof-ai { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.proof-ai .grow { flex: 1; }
+.proof-ai .ai-now { font-size: 12px; color: var(--ink2); }
+.proof-rule { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.proof-rule span { min-width: 0; }
+.proof-rule select { flex: none; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12.5px; }
+@media print { .proof-rail { display: none !important; } }
