@@ -607,6 +607,8 @@ body.focus .sticky-board { display: none; }
 .kb-list { max-height: 56vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px 12px 10px; }
 .kb-group { margin: 12px 0 4px; font-size: 12px; color: var(--accent); letter-spacing: .02em; }
 .kb-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.kb-row { flex-wrap: wrap; }
+.kb-warn { flex-basis: 100%; color: var(--danger, #c0392b); font-size: 12px; padding: 0 0 2px; }
 .kb-label { flex: 1; min-width: 0; font-size: 14px; }
 .kb-key { min-width: 132px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font-variant-numeric: tabular-nums; font-size: 13px; text-align: center; }
 .kb-key i { color: var(--ink3); font-style: normal; }

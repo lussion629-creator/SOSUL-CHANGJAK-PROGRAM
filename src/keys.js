@@ -205,19 +205,33 @@ export async function showKeys() {
         b.classList.add('rec');
         b.textContent = '키를 누르세요…';
         const id = b.dataset.rec;
+        // 받을 수 없는 키는 창을 닫지 않고 계속 기다리며 그 줄 바로 아래에 까닭을 보여 준다 (아래쪽 안내는 목록에 가려 안 보일 수 있다)
+        const warn = (t) => {
+          msg.textContent = t;
+          let n = b.closest('.kb-row').querySelector('.kb-warn');
+          if (!n) { n = document.createElement('small'); n.className = 'kb-warn'; b.closest('.kb-row').appendChild(n); }
+          n.textContent = t;
+        };
         const onKey = (ev) => {
-          if (['Control', 'Shift', 'Alt', 'Meta'].includes(ev.key)) return;
+          // 조합키만 누른 동안은 기다린다. 한글 자판의 오른쪽 Alt(한/영)·오른쪽 Ctrl(한자)도 조합키처럼 보고 기다린다
+          if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph', 'CapsLock', 'NumLock', 'ScrollLock', 'Fn', 'FnLock', 'OS'].includes(ev.key)) return;
+          if (ev.key === 'HangulMode' || ev.key === 'HanjaMode' || ev.key === 'KanaMode' || /^(Lang\d|AltRight|ControlRight|KanaMode|NonConvert|Convert)$/.test(ev.code || '')) {
+            ev.preventDefault(); ev.stopPropagation();
+            warn('오른쪽 Alt(한/영)·오른쪽 Ctrl(한자) 키는 한글 자판에서 단축키로 쓸 수 없어요. 왼쪽 Ctrl·Alt를 함께 눌러 주세요.');
+            return;
+          }
           ev.preventDefault(); ev.stopPropagation();
-          stopRec();
-          if (ev.key === 'Escape') { redraw(); return; }
-          if (ev.key === 'Backspace' || ev.key === 'Delete') { draft[id] = ''; msg.textContent = `‘${BY_ID.get(id).label}’ 단축키를 없앴어요.`; redraw(); return; }
+          if (ev.key === 'Escape') { stopRec(); redraw(); return; }
+          if ((ev.key === 'Backspace' || ev.key === 'Delete') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) { stopRec(); draft[id] = ''; msg.textContent = `‘${BY_ID.get(id).label}’ 단축키를 없앴어요.`; redraw(); return; }
           const combo = comboOf(ev);
-          if (!combo) { msg.textContent = '이 키는 쓸 수 없어요.'; redraw(); return; }
-          if (!/Ctrl|Alt/.test(combo) && !/^F\d/.test(combo)) { msg.textContent = 'Ctrl이나 Alt를 함께 누르거나 F1~F12 키를 쓰세요. (글자만 누르면 원고에 입력돼요)'; redraw(); return; }
+          if (!combo) { warn('이 키는 쓸 수 없어요. 다른 키를 눌러 주세요. (Esc: 취소)'); return; }
+          if (!/Ctrl|Alt/.test(combo) && !/^F\d/.test(combo)) { warn(`${pretty(combo)}: Ctrl이나 Alt를 함께 누르거나 F1~F12 키를 쓰세요. (글자만 누르면 원고에 입력돼요)`); return; }
+          stopRec();
           draft[id] = combo;
           const other = takeOver(combo, id);
           msg.textContent = (other ? `‘${BY_ID.get(other).label}’에 쓰던 ${pretty(combo)}를 옮겼어요. ` : '') + (RESERVED.has(combo) ? `${pretty(combo)}는 브라우저·운영체제도 쓰는 키라 다른 동작과 겹칠 수 있어요.` : '');
           redraw();
+          if (msg.textContent) toast(msg.textContent, 4000);
         };
         recKey = onKey;
         window.addEventListener('keydown', onKey, true);

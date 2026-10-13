@@ -590,6 +590,31 @@ await test('유의어 창: 구절 통째로 바꾸기는 고른 구절을 새로
   await ctx.close();
 });
 
+// ---------------- 단축키 ----------------
+await test('단축키 설정: 한/영·한자 키나 글자만 눌러도 키 받기가 끝나지 않고, 이어서 누른 조합이 칸에 들어가 저장·동작한다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: 'A', html: '<p>글</p>' }]);
+  await page.evaluate(() => document.querySelector('[data-act=keys]').click());
+  await page.waitForSelector('#dlg[open] .kb-list');
+  const btn = '#dlg .kb-row[data-id=synonyms] [data-rec]';
+  await page.click(btn);
+  // 한글 자판의 오른쪽 Alt(한/영)
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'HangulMode', code: 'AltRight', bubbles: true, cancelable: true })));
+  assert((await page.textContent(btn)).includes('키를 누르세요'), '한/영 키에서 키 받기가 끝남');
+  assert((await page.textContent('#dlg .kb-row[data-id=synonyms] .kb-warn')).includes('왼쪽'), '안내가 그 줄에 보여야 함');
+  await page.keyboard.press('U');
+  assert((await page.textContent(btn)).includes('키를 누르세요'), '글자만 눌렀을 때 키 받기가 끝남');
+  await page.keyboard.press('Control+Alt+U');
+  assert((await page.textContent(btn)).replace(/\s/g, '') === 'Ctrl+Alt+U', await page.textContent(btn));
+  await pressDialog(page, 'ok');
+  await page.waitForTimeout(200);
+  await page.locator('.ProseMirror').click();
+  await page.keyboard.press('Control+Alt+U');
+  await page.waitForTimeout(300);
+  assert(await page.isVisible('#synPanel'), '새 키로 유의어 창이 열려야 함');
+  await ctx.close();
+});
+
 export { browser, boot, run, mkProject, typeInto, pressDialog, test, assert, results };
 if (!process.env.NO_CLOSE) {
   await browser.close();
