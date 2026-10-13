@@ -39,6 +39,8 @@ export function loadSettings() {
   // 1.0.4: 복사·붙여넣기는 쓴·지운 양에서 빼는 것으로 한 번 되돌린다 (그 뒤로는 '오늘 쓴 양'에서 고른 대로)
   if (!app.settings.clipV) { app.settings.countPaste = false; app.settings.clipV = 1; }
   migrateTheme(app.settings);
+  // 1.0.15: 앞뒤 빈칸 지우기를 기본으로 켠다 (예전에 꺼진 채로 저장된 것도 한 번 켠다)
+  if (!app.settings.tidyV) { if (app.settings.tidy) app.settings.tidy.trim = true; app.settings.tidyV = 1; }
   applySettings();
 }
 export function saveSettings() {

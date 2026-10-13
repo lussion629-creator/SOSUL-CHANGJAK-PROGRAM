@@ -16,6 +16,9 @@ const RULES = [
   { id: 'quotes', label: '곧은 따옴표를 둥근 따옴표로', hint: '"말" \'생각\' → “말” ‘생각’', on: true },
   { id: 'spaces', label: '여러 칸 띄어쓰기를 한 칸으로', hint: '두 칸 이상 빈칸 → 한 칸, 보이지 않는 특수 빈칸 → 보통 빈칸', on: true },
   { id: 'punctSpace', label: '문장부호 앞 빈칸 지우기', hint: '“가자 .” → “가자.”', on: true },
+  { id: 'punctAfter', label: '문장부호 뒤 한 칸 띄우기', hint: '왔다.그리고 → 왔다. 그리고 (숫자 3.14는 그대로)', on: true },
+  { id: 'quoteSpace', label: '따옴표 안쪽 빈칸 지우기 · 앞 띄우기', hint: '“ 가자 ” → “가자” · 그는“가자” → 그는 “가자”', on: true },
+  { id: 'marks', label: '겹친 문장부호 정리', hint: '.. → 말줄임표 · ,, → , · ?. → ? · ., → .', on: true },
   { id: 'dash', label: '줄표 통일', hint: '-- · ― → —', on: false },
   { id: 'trim', label: '문단·줄 앞뒤 빈칸 지우기', hint: '문단과 줄(Shift+Enter) 처음·끝의 빈칸. 들여쓰기는 쪽 설정이 맡아요', on: true },
 ];
@@ -27,6 +30,8 @@ const TRIM_TAIL = new RegExp(`[${SP}\u3000]+$`);
 const MULTI = new RegExp(`[${SP}]{2,}`, 'g');
 const ODD = new RegExp(`[\u00a0\u2000-\u200a\u202f\u205f]`, 'g'); // 하나만 있는 특수 빈칸
 const ZW = /[\u200b\ufeff]/g; // 폭 없는 빈칸
+const QUOTE_INNER = new RegExp(`([“‘「『])[${SP}]+`, 'g');
+const QUOTE_INNER_END = new RegExp(`[${SP}]+([”’」』])`, 'g');
 const BEFORE_PUNCT = new RegExp(`[${SP}]+([.,!?;:…”’」』)\\]])`, 'g');
 function makeFixer(opt) {
   const ell = opt.ellipsisForm || '…';
@@ -47,6 +52,9 @@ function makeFixer(opt) {
       }
       t = out;
     }
+    if (opt.marks) t = t.replace(/(?<![.…])\.\.(?![.…])/g, ell).replace(/,{2,}/g, ',').replace(/([?!])\.(?![.…])/g, '$1').replace(/\.,|,\./g, '.');
+    if (opt.punctAfter) t = t.replace(/(?<=[가-힣])([.,!?])(?=[가-힣])/g, '$1 ');
+    if (opt.quoteSpace) t = t.replace(QUOTE_INNER, '$1').replace(QUOTE_INNER_END, '$1').replace(/([가-힣.!?…])([“「『])/g, '$1 $2');
     return t;
   };
 }
@@ -199,6 +207,18 @@ export function tidySpots(text, opt = tidyOpt()) {
   }
   if (opt.punctSpace) add('punctSpace', new RegExp(`[${SP}]+(?=[.,!?;:…”’」』)\\]])`, 'g'), () => '');
   if (opt.quotes) add('quotes', /["']/g, (m) => { const p = text[m.index - 1]; const open = !p || /[\s(\[{“‘「『—-]/.test(p); return m[0] === '"' ? (open ? '“' : '”') : (open ? '‘' : '’'); });
+  if (opt.marks) {
+    add('marks', /(?<![.…])\.\.(?![.…])/g, () => ell);
+    add('marks', /,{2,}/g, () => ',');
+    add('marks', /([?!])\.(?![.…])/g, (m) => m[1]);
+    add('marks', /\.,|,\./g, () => '.');
+  }
+  if (opt.punctAfter) add('punctAfter', /(?<=[가-힣])[.,!?](?=[가-힣])/g, (m) => m[0] + ' ');
+  if (opt.quoteSpace) {
+    add('quoteSpace', new RegExp(`(?<=[“‘「『])[${SP}]+`, 'g'), () => '');
+    add('quoteSpace', /[가-힣.!?…](?=[“「『])/g, (m) => m[0] + ' ');
+    add('quoteSpace', new RegExp(`[${SP}]+(?=[”’」』])`, 'g'), () => '');
+  }
   if (opt.trim) { add('trim', new RegExp(`(?:^|(?<=￼))[${SP}\u3000]+`, 'g'), () => ''); add('trim', new RegExp(`[${SP}\u3000]+(?=￼|$)`, 'g'), () => ''); }
   out.sort((a, b) => a.i - b.i || b.len - a.len);
   return out.filter((x, k) => !out.slice(0, k).some((y) => x.i < y.i + y.len && y.i < x.i + x.len));
