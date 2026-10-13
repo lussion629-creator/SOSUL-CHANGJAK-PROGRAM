@@ -21,7 +21,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
       - name: 비밀 값 점검 (키·토큰이 저장소에 없는지)
         run: npm run check:secrets
       - run: npx vite build
-      - run: npx electron-builder --publish never ${{ matrix.os == 'windows-latest' && '--win' || '--mac' }}
+      - run: npx electron-builder --publish never ${{ startsWith(matrix.os, 'windows') && '--win' || '--mac' }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v4
