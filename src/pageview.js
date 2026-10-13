@@ -154,20 +154,38 @@ function setFloats(host, dom, n) {
 }
 // 원고(dom) 앞 띄움 기둥(host)을 맞추며 쪽 수를 잰다. 쪽이 늘면 띄움을 하나 더 세우고 다시 잰다
 function countPages(host, dom) {
+  const { pitch, bodyH, half } = geo;
+  const unit = bodyH + 2 * half; // 한 쪽 본문 칸에 들어가는 높이
+  const G = pitch - unit; // 쪽 사이 띄움 높이
+  // 원고 끝: 맨 끝 문단의 아래 끝 (끝에 붙은 숨은 표시·떠 있는 요소는 건너뛴다)
+  const measure = () => {
+    let el = dom.lastElementChild;
+    while (el) {
+      const cs = getComputedStyle(el);
+      if (cs.display !== 'none' && cs.position !== 'absolute' && cs.position !== 'fixed' && cs.float === 'none' && el.getBoundingClientRect().height > 0) break;
+      el = el.previousElementSibling;
+    }
+    return el ? el.getBoundingClientRect().bottom - dom.getBoundingClientRect().top : 0;
+  };
+  // 마지막 줄이 몇째 쪽 본문 칸 안에 드는가 (쪽 아래 여백까지 넘어갔으면 그다음 쪽: 띄움을 하나 더 세우면 그리로 옮겨진다)
+  const pagesAt = (bottom) => (bottom <= unit + 0.5 ? 1 : Math.ceil((bottom - unit - 0.5) / pitch) + 1);
   let n = host.children.length / 2;
-  let pages = 1;
-  for (let i = 0; i < 6; i++) {
-    setFloats(host, dom, n);
-    const base = dom.getBoundingClientRect().top;
-    const lastEl = dom.lastElementChild;
-    const bottom = lastEl ? lastEl.getBoundingClientRect().bottom - base : 0;
-    // 마지막 줄이 몇째 쪽 본문 칸 안에 드는가 (쪽 아래 여백까지 넘어갔으면 그다음 쪽: 띄움을 하나 더 세우면 그리로 옮겨진다)
-    const unit = geo.bodyH + 2 * geo.half;
-    pages = bottom <= unit + 0.5 ? 1 : Math.ceil((bottom - unit - 0.5) / geo.pitch) + 1;
-    if (pages - 1 === n) break;
-    n = pages - 1;
+  setFloats(host, dom, n);
+  let bottom = measure();
+  let pages = pagesAt(bottom);
+  if (pages - 1 !== n) {
+    // 긴 장을 처음 열 때 띄움을 하나씩 늘리며 맞추면 끝나지 않으므로, 띄움 없는 높이로 쪽 수를 어림해 한 번에 세운다
+    const plain = Math.max(0, bottom - Math.min(n, pages - 1) * G);
+    n = Math.max(0, Math.ceil((plain - unit - 0.5) / unit));
+    for (let i = 0; i < 40; i++) {
+      setFloats(host, dom, n);
+      bottom = measure();
+      pages = pagesAt(bottom);
+      if (pages - 1 === n) break;
+      n = pages - 1;
+    }
   }
-  return pages;
+  return n + 1;
 }
 
 function relayout() {

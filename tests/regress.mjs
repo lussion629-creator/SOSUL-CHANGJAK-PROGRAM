@@ -597,6 +597,30 @@ await test('쪽 보기: 쪽 번호를 작품 전체로 이어 매기면 앞 장�
   await ctx.close();
 });
 
+await test('쪽 보기: 아주 긴 장(수십 쪽)을 처음 열어도 모든 쪽 사이가 나뉘고 끝 줄이 마지막 쪽 칸 안에 든다', async () => {
+  const { ctx, page } = await boot({ pageView: true });
+  const para = '<p>' + PARA.repeat(30) + '</p>';
+  const ids = (await mkProject(page, [{ title: '짧은 장', html: '<p>짧다</p>' }, { title: '긴 장', html: para.repeat(25) }])).order;
+  await page.waitForTimeout(500);
+  await run(page, 'await A.openChapter(arg);', ids[1]);
+  await page.waitForTimeout(1200);
+  const r = await page.evaluate(() => {
+    const d = document.querySelector('#editorHost .ProseMirror'); const b = d.getBoundingClientRect().top;
+    const gaps = [...document.querySelectorAll('#pvFloats .gapf')].map((g) => [g.getBoundingClientRect().top - b, g.getBoundingClientRect().bottom - b]);
+    const sheets = document.querySelectorAll('#sheets .sheet').length;
+    const bottom = d.lastElementChild.getBoundingClientRect().bottom - b;
+    const sheetH = parseFloat(getComputedStyle(document.getElementById('paper')).getPropertyValue('--pv-h'));
+    const pitch = gaps.length > 1 ? gaps[1][0] - gaps[0][0] : 0;
+    // 마지막 쪽 본문 칸 끝 = 마지막 띄움 아래 끝 + 본문 높이(첫 띄움 윗선)
+    const lastBodyEnd = (gaps.length ? gaps[gaps.length - 1][1] : 0) + (gaps.length ? gaps[0][0] : sheetH);
+    return { gaps: gaps.length, sheets, bottom, lastBodyEnd, pitch };
+  });
+  assert(r.sheets > 30, '쪽 수 ' + r.sheets);
+  assert(r.gaps === r.sheets - 1, `쪽 ${r.sheets}개인데 쪽 사이 띄움 ${r.gaps}개`);
+  assert(r.bottom <= r.lastBodyEnd + 1, `끝 줄 ${Math.round(r.bottom)} > 마지막 쪽 본문 끝 ${Math.round(r.lastBodyEnd)}`);
+  await ctx.close();
+});
+
 // ---------------- 유의어 창 ----------------
 await test('유의어 창: 구절 통째로 바꾸기는 고른 구절을 새로 쓴 표현으로 바꾸고, 서식을 지킨다 (AI는 흉내)', async () => {
   const { ctx, page } = await boot({ synProvider: 'openai', ai: { provider: 'openai', models: { openai: 'gpt-test-mini' } } });
