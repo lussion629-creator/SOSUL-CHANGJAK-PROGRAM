@@ -14,19 +14,28 @@ import { $, h, toast, dialog } from './ui.js';
 const RULES = [
   { id: 'ellipsis', label: '말줄임표 통일', hint: '... · 。。。 · ⋯ → 고른 모양', on: true },
   { id: 'quotes', label: '곧은 따옴표를 둥근 따옴표로', hint: '"말" \'생각\' → “말” ‘생각’', on: true },
-  { id: 'spaces', label: '여러 칸 띄어쓰기를 한 칸으로', hint: '두 칸 이상 빈칸 → 한 칸', on: true },
+  { id: 'spaces', label: '여러 칸 띄어쓰기를 한 칸으로', hint: '두 칸 이상 빈칸 → 한 칸, 보이지 않는 특수 빈칸 → 보통 빈칸', on: true },
   { id: 'punctSpace', label: '문장부호 앞 빈칸 지우기', hint: '“가자 .” → “가자.”', on: true },
   { id: 'dash', label: '줄표 통일', hint: '-- · ― → —', on: false },
-  { id: 'trim', label: '문단 앞뒤 빈칸 지우기', hint: '들여쓰기는 쪽 설정이 맡아요', on: false },
+  { id: 'trim', label: '문단·줄 앞뒤 빈칸 지우기', hint: '문단과 줄(Shift+Enter) 처음·끝의 빈칸. 들여쓰기는 쪽 설정이 맡아요', on: true },
 ];
+// 빈칸으로 볼 글자: 보통 빈칸·탭과, 스페이스바·붙여넣기·한글/Word 파일에서 들어오는 보이지 않는 빈칸들
+// (줄 바꿈 없는 빈칸 U+00A0, 여러 폭 빈칸 U+2000~200B, 좁은 빈칸 U+202F, 수학 빈칸 U+205F, BOM U+FEFF). 전각 빈칸(U+3000)은 앞뒤 지우기에서만 빈칸으로 본다
+const SP = ' \t\u00a0\u2000-\u200b\u202f\u205f\ufeff';
+const TRIM_HEAD = new RegExp(`^[${SP}\u3000]+`);
+const TRIM_TAIL = new RegExp(`[${SP}\u3000]+$`);
+const MULTI = new RegExp(`[${SP}]{2,}`, 'g');
+const ODD = new RegExp(`[\u00a0\u2000-\u200a\u202f\u205f]`, 'g'); // 하나만 있는 특수 빈칸
+const ZW = /[\u200b\ufeff]/g; // 폭 없는 빈칸
+const BEFORE_PUNCT = new RegExp(`[${SP}]+([.,!?;:…”’」』)\\]])`, 'g');
 function makeFixer(opt) {
   const ell = opt.ellipsisForm || '…';
   return (text, prev = '') => {
     let t = text;
     if (opt.ellipsis) t = t.replace(/\.{3,}|。{3,}|…{1,2}|⋯+/g, (m) => (m === ell ? m : ell));
     if (opt.dash) t = t.replace(/(?<!-)--(?!-)|―|‒/g, '—');
-    if (opt.spaces) t = t.replace(/ {2,}/g, ' ').replace(/　{2,}/g, '　');
-    if (opt.punctSpace) t = t.replace(/ +([.,!?;:…”’」』)\]])/g, '$1');
+    if (opt.spaces) t = t.replace(ZW, '').replace(MULTI, ' ').replace(ODD, ' ').replace(/　{2,}/g, '　');
+    if (opt.punctSpace) t = t.replace(BEFORE_PUNCT, '$1');
     if (opt.quotes) {
       let out = '', p = prev;
       for (const ch of t) {
@@ -41,18 +50,27 @@ function makeFixer(opt) {
     return t;
   };
 }
-// 문단(블록) 하나의 글자 노드들에 규칙 적용: [{node, text, newText}]
+// 문단(블록) 하나의 글자 노드들에 규칙 적용. texts의 null은 줄 바꿈(Shift+Enter)이다.
+// 앞뒤 빈칸은 문단의 처음·끝과 줄 바꿈 앞뒤에서 지운다. 빈칸만 있는 글자 노드가 이어져도 다 지운다.
 function fixBlockTexts(texts, fix, opt) {
   let prev = '';
-  const out = texts.map((t, i) => {
-    let n = fix(t, prev);
-    if (opt.trim) {
-      if (i === 0) n = n.replace(/^[ 　\t]+/, '');
-      if (i === texts.length - 1) n = n.replace(/[ 　\t]+$/, '');
-    }
+  const out = texts.map((t) => {
+    if (t == null) { prev = '\n'; return null; }
+    const n = fix(t, prev);
     prev = n.slice(-1) || prev;
     return n;
   });
+  if (opt.trim) {
+    // 줄마다: 앞쪽은 글자가 나올 때까지, 뒤쪽은 뒤에서부터 글자가 나올 때까지 빈칸을 지운다
+    let i = 0;
+    while (i < out.length) {
+      let j = i;
+      while (j < out.length && out[j] != null) j++;
+      for (let k = i; k < j; k++) { out[k] = out[k].replace(TRIM_HEAD, ''); if (out[k]) break; }
+      for (let k = j - 1; k >= i; k--) { out[k] = out[k].replace(TRIM_TAIL, ''); if (out[k]) break; }
+      i = j + 1;
+    }
+  }
   return out;
 }
 
@@ -61,16 +79,18 @@ function countChanges(html, fix, opt) {
   let n = 0;
   for (const blk of body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li')) {
     if (blk.querySelector('p')) continue;
-    const nodes = textNodes(blk);
-    const next = fixBlockTexts(nodes.map((x) => x.textContent), fix, opt);
-    nodes.forEach((x, i) => { if (x.textContent !== next[i]) { n++; x.textContent = next[i]; } });
+    const nodes = textNodes(blk, true);
+    // 고칠 곳 수는 표시하기와 같은 셈으로 (글자 노드 수가 아니라 실제 자리 수)
+    n += tidySpots(nodes.map((x) => (x.nodeType === 3 ? x.textContent : '￼')).join(''), opt).length;
+    const next = fixBlockTexts(nodes.map((x) => (x.nodeType === 3 ? x.textContent : null)), fix, opt);
+    nodes.forEach((x, i) => { if (x.nodeType === 3 && x.textContent !== next[i]) x.textContent = next[i]; });
   }
   return { n, html: body.innerHTML };
 }
-function textNodes(el) {
+function textNodes(el, withBr = false) {
   const out = [];
-  const w = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  while (w.nextNode()) out.push(w.currentNode);
+  const w = el.ownerDocument.createTreeWalker(el, withBr ? NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT : NodeFilter.SHOW_TEXT);
+  while (w.nextNode()) { const c = w.currentNode; if (c.nodeType === 3 || c.nodeName === 'BR') out.push(c); }
   return out;
 }
 
@@ -82,9 +102,9 @@ function fixInEditor(fix, opt) {
   state.doc.descendants((node, pos) => {
     if (!node.isTextblock) return true;
     const parts = [];
-    node.forEach((child, off) => { if (child.isText) parts.push({ child, from: pos + 1 + off }); });
-    const next = fixBlockTexts(parts.map((p) => p.child.text), fix, opt);
-    parts.forEach((p, i) => { if (next[i] !== p.child.text) edits.push({ from: p.from, to: p.from + p.child.nodeSize, text: next[i], marks: p.child.marks }); });
+    node.forEach((child, off) => { if (child.isText) parts.push({ child, from: pos + 1 + off }); else if (child.type.name === 'hardBreak') parts.push({ br: true }); });
+    const next = fixBlockTexts(parts.map((p) => (p.br ? null : p.child.text)), fix, opt);
+    parts.forEach((p, i) => { if (!p.br && next[i] !== p.child.text) edits.push({ from: p.from, to: p.from + p.child.nodeSize, text: next[i], marks: p.child.marks }); });
     return false;
   });
   if (!edits.length) return 0;
@@ -171,16 +191,21 @@ export function tidySpots(text, opt = tidyOpt()) {
   const ell = opt.ellipsisForm || '…';
   if (opt.ellipsis) add('ellipsis', /\.{3,}|。{3,}|…{1,2}|⋯+/g, (m) => (m[0] === ell ? null : ell));
   if (opt.dash) add('dash', /(?<!-)--(?!-)|―|‒/g, () => '—');
-  if (opt.spaces) { add('spaces', /(?<=\S) {2,}/g, () => ' '); add('spaces', /(?<=\S)　{2,}/g, () => '　'); }
-  if (opt.punctSpace) add('punctSpace', / +(?=[.,!?;:…”’」』)\]])/g, () => '');
+  if (opt.spaces) {
+    add('spaces', new RegExp(`(?<=[^${SP}\u3000￼])[${SP}]{2,}`, 'g'), () => ' ');
+    add('spaces', new RegExp(`(?<=[^${SP}\u3000￼])[\u00a0\u2000-\u200a\u202f\u205f](?=[^${SP}\u3000￼])`, 'g'), () => ' ');
+    add('spaces', /[\u200b\ufeff]/g, () => '');
+    add('spaces', /(?<=\S)　{2,}/g, () => '　');
+  }
+  if (opt.punctSpace) add('punctSpace', new RegExp(`[${SP}]+(?=[.,!?;:…”’」』)\\]])`, 'g'), () => '');
   if (opt.quotes) add('quotes', /["']/g, (m) => { const p = text[m.index - 1]; const open = !p || /[\s(\[{“‘「『—-]/.test(p); return m[0] === '"' ? (open ? '“' : '”') : (open ? '‘' : '’'); });
-  if (opt.trim) { add('trim', /^[ 　\t]+/g, () => ''); add('trim', /[ 　\t]+$/g, () => ''); }
+  if (opt.trim) { add('trim', new RegExp(`(?:^|(?<=￼))[${SP}\u3000]+`, 'g'), () => ''); add('trim', new RegExp(`[${SP}\u3000]+(?=￼|$)`, 'g'), () => ''); }
   out.sort((a, b) => a.i - b.i || b.len - a.len);
   return out.filter((x, k) => !out.slice(0, k).some((y) => x.i < y.i + y.len && y.i < x.i + x.len));
 }
 const tmKey = new PluginKey('tidyMarks');
 let tmMemo = new WeakMap(), tmSig = '';
-const vis = (t) => (t === '' ? '(지움)' : t.trim() ? t : `빈칸 ${t.length}칸`);
+const vis = (t) => (t === '' ? '(지움)' : t.replace(/[\s\u200b\ufeff]/g, '') ? t : `빈칸 ${t.length}칸`);
 function tidyDeco(doc) {
   const opt = tidyOpt();
   const sig = JSON.stringify(opt);
