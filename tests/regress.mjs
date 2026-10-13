@@ -615,6 +615,45 @@ await test('단축키 설정: 한/영·한자 키나 글자만 눌러도 키 받
   await ctx.close();
 });
 
+// ---------------- 내보내기 ----------------
+await test('내보내기: 처음에는 표지(작품 제목)·장 제목 없이, 고른 것은 다음에도 남는다 (txt·md·html·docx·hwpx·doc)', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: '0장', html: '<p>첫 장 본문</p>' }, { title: '1장', html: '<p>둘째 장 본문</p>' }], '작품제목가나');
+  const exportAs = async (fmt, tweak = '') => {
+    await page.evaluate(() => { (async () => (await import('/src/features.js')).showExport())(); });
+    await page.waitForSelector('#dlg[open] select[name=fmt]');
+    await page.selectOption('#dlg select[name=fmt]', fmt);
+    if (tweak) await page.click(`#dlg input[name=${tweak}]`);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#dlg .dlg-foot button[value="ok"]')]);
+    const buf = await (await import('node:fs/promises')).readFile(await dl.path());
+    if (fmt === 'docx' || fmt === 'hwpx') {
+      const JSZip = (await import('jszip')).default;
+      const z = await JSZip.loadAsync(buf);
+      let t = '';
+      for (const n of Object.keys(z.files)) if (/document\.xml$|section0\.xml$/.test(n)) t += await z.file(n).async('string');
+      return t.replace(/<[^>]+>/g, ' ');
+    }
+    const s = buf.toString('utf8');
+    // RTF는 한글을 \uNNNN? 꼴로 적는다
+    return fmt === 'doc' ? s.replace(/\\u(-?\d+)\??/g, (_, n) => String.fromCharCode((+n + 65536) % 65536)) : s;
+  };
+  for (const fmt of ['txt', 'md', 'html', 'docx', 'hwpx', 'doc']) {
+    const t = await exportAs(fmt);
+    assert(t.includes('첫 장 본문') && t.includes('둘째 장 본문'), fmt + ': 본문이 빠짐');
+    assert(!/(^|[^가-힣])[01]장/.test(t.replace(/<title>.*?<\/title>/, '')), fmt + ': 장 제목이 들어감');
+    const body = fmt === 'html' ? t.replace(/<title>.*?<\/title>/, '') : fmt === 'doc' ? t.replace(/\{\\info.*?\}\}/, '') : t;
+    assert(!body.includes('작품제목가나'), fmt + ': 작품 제목이 들어감');
+  }
+  // 장 제목을 켜면 다음에도 켜져 있다
+  const t = await exportAs('txt', 'chapterTitles');
+  assert(t.includes('0장') && t.includes('1장'), '장 제목을 켰는데 없음');
+  await page.evaluate(() => { (async () => (await import('/src/features.js')).showExport())(); });
+  await page.waitForSelector('#dlg[open] input[name=chapterTitles]');
+  assert(await page.isChecked('#dlg input[name=chapterTitles]'), '고른 것이 남아야 함');
+  assert(!(await page.isChecked('#dlg input[name=titlePage]')), '표지는 계속 꺼져 있어야 함');
+  await ctx.close();
+});
+
 export { browser, boot, run, mkProject, typeInto, pressDialog, test, assert, results };
 if (!process.env.NO_CLOSE) {
   await browser.close();

@@ -104,7 +104,7 @@ export async function writeDocx(book, opt = {}) {
     }))));
   }
   book.chapters.forEach((ch, i) => {
-    if (i > 0) children.push(new Paragraph({ children: [new PageBreak()] }));
+    if (i > 0 && opt.chapterBreak !== false) children.push(new Paragraph({ children: [new PageBreak()] }));
     if (opt.chapterTitles !== false && ch.title) {
       children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { after: 400 }, children: [new TextRun({ text: ch.title })] }));
     }

@@ -311,6 +311,7 @@ dialog::backdrop { background: rgba(20, 15, 10, .35); }
   #app, dialog, .toast { display: none !important; }
   #printArea { display: block; }
   #printArea section { break-after: page; }
+  #printArea section.cont { break-after: auto; }
   #printArea .title-page { height: 90vh; display: flex; flex-direction: column; justify-content: center; align-items: center; }
   #printArea h1.ch { font-size: 18pt; margin: 0 0 1.2em; }
   #printArea .prose { font-size: 10.5pt; color: #000; }

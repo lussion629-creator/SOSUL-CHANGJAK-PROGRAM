@@ -253,7 +253,7 @@ export async function writeRtf(book, opt = {}) {
     body.push('\\page');
   }
   book.chapters.forEach((ch, idx) => {
-    if (idx > 0) body.push('\\page');
+    if (idx > 0 && opt.chapterBreak !== false) body.push('\\page');
     if (opt.chapterTitles !== false && ch.title) {
       body.push(`\\pard\\plain\\f0\\outlinelevel0\\sa400\\fs32\\b ${rtfText(ch.title)}\\b0\\par`);
     }

@@ -227,8 +227,9 @@ export async function writeHwpx(book, opt = {}) {
     if (book.author) para([{ text: book.author }], { pPr: paraId('CENTER', 0, 0, 2000), bigSize: 1400 });
     first = false;
   }
-  for (const ch of book.chapters) {
-    const pageBreak = !first;
+  for (const [ci, ch] of book.chapters.entries()) {
+    // 장마다 새 쪽 (끄면 표지 다음 첫 장만 새 쪽에서 시작하고 나머지 장은 이어 쓴다)
+    const pageBreak = !first && (ci === 0 || opt.chapterBreak !== false);
     first = false;
     let brk = pageBreak;
     if (opt.chapterTitles !== false && ch.title) {

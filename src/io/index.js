@@ -102,12 +102,12 @@ export async function exportBook(format, book, opt) {
     return { blob: new Blob(['﻿' + body], { type: 'text/plain;charset=utf-8' }), name: `${safe}.txt` };
   }
   if (format === 'md') {
-    const body = book.chapters.map((c) => `# ${c.title}\n\n` + htmlToParagraphs(c.html).join('\n\n')).join('\n\n');
+    const body = book.chapters.map((c) => (opt.chapterTitles !== false ? `# ${c.title}\n\n` : '') + htmlToParagraphs(c.html).join('\n\n')).join('\n\n');
     return { blob: new Blob([body], { type: 'text/markdown;charset=utf-8' }), name: `${safe}.md` };
   }
   if (format === 'html') {
-    const body = book.chapters.map((c) => `<section><h1>${c.title}</h1>${c.html}</section>`).join('');
-    const html = `<!doctype html><meta charset="utf-8"><title>${book.title}</title><style>body{font-family:serif;max-width:40em;margin:3em auto;line-height:1.8}section{page-break-after:always}p{margin:0;text-indent:1em}</style>${body}`;
+    const body = book.chapters.map((c) => `<section${opt.chapterBreak === false ? ' class="cont"' : ''}>${opt.chapterTitles !== false ? `<h1>${c.title}</h1>` : ''}${c.html}</section>`).join('');
+    const html = `<!doctype html><meta charset="utf-8"><title>${book.title}</title><style>body{font-family:serif;max-width:40em;margin:3em auto;line-height:1.8}section{page-break-after:always}section.cont{page-break-after:auto}p{margin:0;text-indent:1em}</style>${body}`;
     return { blob: new Blob([html], { type: 'text/html;charset=utf-8' }), name: `${safe}.html` };
   }
   throw new Error('지원하지 않는 형식');

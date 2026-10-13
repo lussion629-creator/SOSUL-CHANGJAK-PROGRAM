@@ -177,6 +177,8 @@ function bookOf(range) {
 export async function showExport() {
   await saveNow();
   const drive = G.status().connected;
+  // 표지·장 제목·장마다 새 쪽: 처음에는 끄고, 고른 것은 다음에도 그대로
+  const ex = { titlePage: false, chapterTitles: false, chapterBreak: true, ...(app.settings.exportOpts || {}) };
   const r = await dialog({
     title: '내보내기',
     body: `
@@ -192,8 +194,9 @@ export async function showExport() {
       </select></label>
       <label class="field"><span>범위</span><select name="range"><option value="all">작품 전체 (${app.project.order.length}개 장)</option><option value="cur">지금 장만</option></select></label>
       <div class="ps-sum"><span>쪽 설정</span><b>${h(layoutSummary())}</b><button type="button" class="small" data-open-setup>바꾸기</button></div>
-      <label class="check"><input type="checkbox" name="titlePage" checked> 표지 (제목·지은이)</label>
-      <label class="check"><input type="checkbox" name="chapterTitles" checked> 장 제목 넣기 (장마다 새 쪽)</label>
+      <label class="check"><input type="checkbox" name="titlePage" ${ex.titlePage ? 'checked' : ''}> 표지 (작품 제목·지은이)</label>
+      <label class="check"><input type="checkbox" name="chapterTitles" ${ex.chapterTitles ? 'checked' : ''}> 장 제목 넣기 (‘1장’ 같은 장 이름)</label>
+      <label class="check"><input type="checkbox" name="chapterBreak" ${ex.chapterBreak ? 'checked' : ''}> 장마다 새 쪽에서 시작</label>
       <label class="check"><input type="checkbox" name="annos" checked> 본문 주석(교정 제안·인용·의도·색인)을 Word 메모로 넣기 <small class="hint">(.docx만)</small></label>
       <label class="field"><span>지은이 (표지에 표시)</span><input name="author" value="${h(app.settings.author)}" placeholder="필명"></label>
       ${drive ? '<label class="check"><input type="checkbox" name="toDrive"> 구글 드라이브에도 저장 (Word는 Google 문서로 변환)</label>' : '<p class="hint" style="margin:0">구글 드라이브에 연결하면 내보낸 파일을 드라이브에도 바로 넣을 수 있어요.</p>'}
@@ -205,11 +208,12 @@ export async function showExport() {
   if (r.value !== 'ok') return;
   const f = r.form;
   app.settings.author = f.author.value.trim();
+  app.settings.exportOpts = { titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, chapterBreak: f.chapterBreak.checked };
   saveSettings();
   const book = bookOf(f.range.value);
   if (f.annos.checked && f.fmt.value === 'docx') book.annos = await annosForExport();
   const L = layoutOf();
-  const opt = { layout: { ...L, fontName: fontName(L.font) }, size: L.size, lineHeight: L.line / 100, titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, indent: L.indent > 0 };
+  const opt = { layout: { ...L, fontName: fontName(L.font) }, size: L.size, lineHeight: L.line / 100, titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, chapterBreak: f.chapterBreak.checked, indent: L.indent > 0 };
   if (f.fmt.value === 'pdf') return printBook(book, opt);
   try {
     const out = await exportBook(f.fmt.value, book, opt);
@@ -222,7 +226,7 @@ export async function showExport() {
   } catch (e) { console.error(e); toast('내보내지 못했습니다: ' + e.message, 6000); }
 }
 
-export function printBook(book = bookOf('all'), opt = { titlePage: true, chapterTitles: true }) {
+export function printBook(book = bookOf('all'), opt = { titlePage: false, chapterTitles: false, chapterBreak: true, ...(app.settings.exportOpts || {}) }) {
   const L = layoutOf();
   const t = textCss(L);
   let area = $('#printArea');
@@ -244,7 +248,7 @@ export function printBook(book = bookOf('all'), opt = { titlePage: true, chapter
       #printArea h1.ch { font-family: ${t.fontFamily}; }
     }</style>` +
     (opt.titlePage ? `<section class="title-page"><h1 style="font-size:26pt">${h(book.title)}</h1><p style="font-size:13pt">${h(book.author || '')}</p></section>` : '') +
-    book.chapters.map((c) => `<section>${opt.chapterTitles ? `<h1 class="ch">${h(c.title)}</h1>` : ''}<div class="prose">${sanitizeHtml(c.html)}</div></section>`).join('');
+    book.chapters.map((c) => `<section${opt.chapterBreak === false ? ' class="cont"' : ''}>${opt.chapterTitles ? `<h1 class="ch">${h(c.title)}</h1>` : ''}<div class="prose">${sanitizeHtml(c.html)}</div></section>`).join('');
   setTimeout(() => window.print(), 50);
 }
 
