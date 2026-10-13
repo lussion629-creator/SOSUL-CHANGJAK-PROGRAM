@@ -6,7 +6,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { closeHistory } from '@tiptap/pm/history';
 import * as S from './store.js';
 import { app, saveSettings } from './app.js';
-import { $, h, toast, toastAction, dialog } from './ui.js';
+import { $, h, toast, toastAction, dialog, symRails } from './ui.js';
 import { scheduleRail } from './annotate.js';
 import { applyPageView, isPageView } from './pageview.js';
 import { askJSON, aiLabel, aiMissing, showAiSettings } from './ai.js';
@@ -625,7 +625,8 @@ function drawProofRail() {
   body.classList.toggle('has-proof-rail', on);
   body.classList.toggle('proof-right', on && right);
   const now = on + (on && right ? 2 : 0);
-  if (was !== now) { scheduleRail(30); if (isPageView()) { applyPageView(); scheduleProofRail(80); return; } }
+  const symChanged = symRails();
+  if (was !== now || symChanged) { scheduleRail(30); if (isPageView()) { applyPageView(); scheduleProofRail(80); return; } }
   if (!on) { railEl.hidden = true; railEl.innerHTML = ''; railItems = []; return; }
   railEl.hidden = false;
   const paper = $('#paper');

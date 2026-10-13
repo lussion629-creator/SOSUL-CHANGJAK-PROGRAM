@@ -45,7 +45,8 @@ let geo = null; // 지금 쪽 크기 (px)
 let last = '';
 export function applyPageView() {
   const paper = $('#paper');
-  const on = isPageView() && !!app.project;
+  // 퇴고 모드에서는 원고 칸이 옆 창으로 옮겨 가므로 쪽 나눔 빈칸을 넣지 않는다
+  const on = isPageView() && !!app.project && !document.body.classList.contains('revising');
   paper.classList.toggle('pv', on);
   document.body.classList.toggle('pageview', on);
   $('#pvZoom') && ($('#pvZoom').hidden = !on);
@@ -229,10 +230,19 @@ export function togglePageView(on = !isPageView()) {
   saveSettings();
   applyPageView();
 }
+/** 쪽 보기의 지금 배율 (폭 맞춤일 때는 계산된 값) */
+export const pvZoomNow = () => geo?.z || (+app.settings.pvZoom || 100) / 100;
 export function setZoom(v) {
   app.settings.pvZoom = v;
   saveSettings();
   applyPageView();
+  // 아래 줄 배율 칸: 목록에 없는 배율(Ctrl+휠로 맞춘 110% 등)도 보이게
+  const sel = $('#pvZoomSel');
+  if (sel) {
+    sel.querySelector('option[data-custom]')?.remove();
+    if (![...sel.options].some((o) => o.value === String(v))) sel.add(new Option(`${v}%`, String(v)), null), sel.lastElementChild.dataset.custom = '1';
+    sel.value = String(v);
+  }
 }
 
 export function bindPageView() {

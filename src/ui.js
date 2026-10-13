@@ -94,3 +94,13 @@ export function ago(t) {
   if (s < 86400) return `${Math.floor(s / 3600)}시간 전`;
   return `${Math.floor(s / 86400)}일 전`;
 }
+
+/** 원고 옆 여백 카드(주석·교정)가 한쪽에만 있어도 종이가 화면 가운데에 오게 양쪽 여백을 같게 둔다 (화면이 넉넉할 때). 바뀌었으면 true */
+export function symRails() {
+  const b = document.body, sc = document.getElementById('paperScroll');
+  const any = b.classList.contains('has-anno-rail') || b.classList.contains('has-proof-rail');
+  const on = !!(any && sc && sc.clientWidth >= 1120);
+  const was = b.classList.contains('rail-sym');
+  b.classList.toggle('rail-sym', on);
+  return was !== on;
+}

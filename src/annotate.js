@@ -5,7 +5,7 @@ import * as S from './store.js';
 import { app, saveNow, openChapter, saveSettings } from './app.js';
 import { parseHtml } from './sanitize.js';
 import { isPageView, applyPageView } from './pageview.js';
-import { $, h, toast, dialog, confirmDlg, ago } from './ui.js';
+import { $, h, toast, dialog, confirmDlg, ago, symRails } from './ui.js';
 
 export const KINDS = {
   index: { name: '색인', hint: '찾아보기에 올릴 낱말·이름' },
@@ -247,8 +247,9 @@ function drawRail() {
   const wide = scroll.clientWidth >= 860;
   const was = document.body.classList.contains('has-anno-rail');
   document.body.classList.toggle('has-anno-rail', on && wide);
+  const symChanged = symRails();
   // 여백이 생기거나 없어지면 쪽 보기 크기를 다시 맞춘다
-  if (was !== (on && wide) && isPageView()) { applyPageView(); setTimeout(renderRail, 60); }
+  if ((was !== (on && wide) || symChanged) && isPageView()) { applyPageView(); setTimeout(renderRail, 60); }
   document.body.classList.toggle('anno-left', side() === 'left');
   document.body.classList.toggle('anno-off', side() === 'off');
   if (!on || !wide) { rail.hidden = true; rail.innerHTML = ''; return; }

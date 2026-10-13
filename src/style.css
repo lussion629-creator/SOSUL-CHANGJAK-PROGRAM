@@ -822,6 +822,8 @@ body.focus .sticky-board { display: none; }
 /* 교정 여백 카드 (왼쪽, 주석 여백이 왼쪽이면 오른쪽) */
 body.has-proof-rail:not(.proof-right) .paper-scroll { padding-left: 268px; }
 body.has-proof-rail.proof-right .paper-scroll { padding-right: 268px; }
+/* 여백 카드가 한쪽에만 있어도 종이는 화면 가운데에 (넉넉한 화면에서) */
+body.rail-sym .paper-scroll { padding-left: 268px; padding-right: 268px; }
 .proof-rail { position: absolute; top: 0; z-index: 3; }
 .proof-rail .pc-title { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--ink3); letter-spacing: .02em; }
 .proof-rail .pc-title button { margin-left: auto; background: none; border: 0; color: var(--ink3); font-size: 11.5px; padding: 2px 6px; border-radius: 5px; }
@@ -946,3 +948,7 @@ body.has-proof-rail.proof-right .paper-scroll { padding-right: 268px; }
   :root[data-hl="comp"] .ProseMirror mark, :root[data-hl="comp"] .prose mark,
   :root[data-hl="comp"] .ProseMirror mark[data-color], :root[data-hl="comp"] .prose mark[data-color] { background: var(--hl) !important; color: var(--hl-ink) !important; }
 }
+
+/* Ctrl+휠 확대·축소 배율 표시 */
+.zoom-badge { position: fixed; left: 50%; top: 96px; transform: translateX(-50%); z-index: 70; padding: 7px 14px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 13px; font-variant-numeric: tabular-nums; pointer-events: none; opacity: 0; transition: opacity .2s; }
+.zoom-badge.on { opacity: .92; }
