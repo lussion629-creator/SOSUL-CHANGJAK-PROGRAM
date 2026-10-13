@@ -1,8 +1,8 @@
 // 쪽 보기: 편집하면서 원고를 쪽 설정(용지·여백·글자)대로 한 쪽씩 나눠 보여 준다.
-// 줄마다 위치를 재서, 쪽 끝에 닿는 줄 앞에 빈 칸(다음 쪽까지의 거리)을 끼워 넣는 방식이다.
+// 원고 앞에 폭 없는 띄움(float) 기둥을 세워, 쪽 아래 여백~다음 쪽 위 여백 자리를 브라우저가 줄을 놓을 때 비켜 가게 한다.
+// 원고 안에는 아무것도 끼워 넣지 않으므로 한글 조합 중에도 줄이 바로 다음 쪽으로 넘어간다.
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
-import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { app, saveSettings } from './app.js';
 import { layoutOf, bodyBox, mm2px, pt2px, textCss, numSide } from './layout.js';
 import { $ } from './ui.js';
@@ -15,16 +15,7 @@ export const PageBreaks = Extension.create({
   addProseMirrorPlugins() {
     return [new Plugin({
       key,
-      state: {
-        init: () => DecorationSet.empty,
-        apply(tr, set) {
-          const meta = tr.getMeta(key);
-          if (meta) return DecorationSet.create(tr.doc, meta);
-          return set.map(tr.mapping, tr.doc);
-        },
-      },
       props: {
-        decorations(state) { return key.getState(state); },
         // 쪽 사이 빈칸을 건너 위아래로 옮기기: 브라우저에 맡기면 빈칸에서 맨 끝·맨 앞으로 튄다
         handleKeyDown(view, e) {
           if (!geo || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.ctrlKey || e.metaKey || e.altKey || view.composing) return false;
@@ -34,17 +25,6 @@ export const PageBreaks = Extension.create({
     })];
   },
 });
-
-function gapWidget(pos, h, block) {
-  return Decoration.widget(pos, () => {
-    const el = document.createElement(block ? 'div' : 'span');
-    el.className = 'pg-gap' + (block ? ' block' : '');
-    el.contentEditable = 'false';
-    el.style.height = h + 'px';
-    el.dataset.h = h;
-    return el;
-  }, { side: -1, ignoreSelection: true, key: `g${pos}-${block ? 1 : 0}-${Math.round(h * 2)}` });
-}
 
 export const isPageView = () => !!app.settings.pageView;
 
@@ -56,7 +36,7 @@ function crossGap(view, dir, extend) {
   let c;
   try { c = view.coordsAtPos(head); } catch { return false; }
   const lh = Math.max(8, c.bottom - c.top);
-  const gaps = [...view.dom.querySelectorAll('.pg-gap')].map((g) => g.getBoundingClientRect()).filter((r) => r.height > 0);
+  const gaps = [...document.querySelectorAll('#pvFloats .gapf')].map((g) => g.getBoundingClientRect()).filter((r) => r.height > 0);
   // 다음(이전) 줄로 갈 자리
   let y = dir > 0 ? c.bottom + lh / 2 : c.top - lh / 2;
   const hit = gaps.find((r) => (dir > 0 ? r.top < y + lh / 2 && r.bottom > c.bottom - 1 : r.bottom > y - lh / 2 && r.top < c.top + 1));
@@ -65,7 +45,16 @@ function crossGap(view, dir, extend) {
   // 같은 세로 이동이 이어지면 처음 가로 위치를 지킨다
   const x = goalAt === head && goalX != null ? goalX : c.left;
   const box = view.dom.getBoundingClientRect();
-  const found = view.posAtCoords({ left: Math.min(Math.max(x, box.left + 1), box.right - 1), top: y });
+  const left = Math.min(Math.max(x, box.left + 1), box.right - 1);
+  let found = view.posAtCoords({ left, top: y });
+  // 위로 갈 때: 쪽 마지막 줄 아래에 남는 빈 자리가 있으므로, 띄움 위쪽 줄에 닿을 때까지 조금씩 올라가 본다
+  for (let i = 0; dir < 0 && found && i < 8; i++) {
+    let b;
+    try { b = view.coordsAtPos(found.pos).bottom; } catch { break; }
+    if (b <= hit.top + 1) break;
+    y -= lh / 2;
+    found = view.posAtCoords({ left, top: y });
+  }
   if (!found) return false;
   const pos = found.pos;
   if (pos === head) return false;
@@ -99,7 +88,7 @@ export function applyPageView() {
     geo = null; last = '';
     $('#sheets')?.remove();
     paper.style.cssText = '';
-    if (key.getState(app.editor.state)?.find().length) app.editor.view.dispatch(app.editor.state.tr.setMeta(key, []).setMeta('addToHistory', false));
+    $('#pvFloats')?.remove(); floatSig = '';
     return;
   }
   const L = layoutOf();
@@ -138,127 +127,60 @@ export function applyPageView() {
 }
 
 let timer, raf;
-let lastCost = 0; // 마지막으로 잰 데 걸린 시간 (ms)
 export function schedule(delay = 250) {
   if (!geo) return;
   clearTimeout(timer);
   cancelAnimationFrame(raf);
-  // 0: 이번 화면을 그리기 전에 바로 (글을 쓰는 중: 줄이 쪽 끝을 넘을 때 잘못된 자리에 잠깐 보였다가 튀지 않게)
-  // 아주 긴 장이라 재는 데 오래 걸리면 입력이 끊기지 않게 조금 모아서 잰다
-  if (!delay && lastCost > 30) delay = 120;
+  // 0: 이번 화면을 그리기 전에 바로 (쪽 수·띄움 기둥만 고치므로 가볍다)
   if (!delay) { raf = requestAnimationFrame(relayout); return; }
   timer = setTimeout(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(relayout); }, delay);
 }
 
-// 문단 안의 글자 노드들
-function textNodes(el) {
-  const out = [];
-  const tw = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (n.parentElement.closest('[contenteditable="false"]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
-  });
-  while (tw.nextNode()) if (tw.currentNode.textContent.length) out.push(tw.currentNode);
-  return out;
-}
-
-// 문단 하나의 줄들: [{top, bottom}] (화면 좌표)
-function linesOf(nodes, range) {
-  const rects = [];
-  for (const n of nodes) {
-    range.selectNodeContents(n);
-    for (const r of range.getClientRects()) if (r.height > 0) rects.push(r);
+// 띄움 기둥: [폭 0, 본문 높이] [폭 100%, 쪽 사이 높이] 를 번갈아 오른쪽에 쌓는다 (clear로 하나씩 아래로).
+// 줄 상자가 '쪽 사이' 띄움에 조금이라도 걸리면 브라우저가 그 줄을 띄움 아래(다음 쪽 첫 줄 자리)로 옮긴다.
+let floatSig = '';
+function setFloats(view, n) {
+  const dom = view.dom;
+  let host = $('#pvFloats');
+  if (!host || host.nextElementSibling !== dom) {
+    host?.remove();
+    host = document.createElement('div');
+    host.id = 'pvFloats';
+    host.setAttribute('aria-hidden', 'true');
+    dom.before(host);
+    floatSig = '';
   }
-  rects.sort((a, b) => a.top - b.top);
-  const lines = [];
-  for (const r of rects) {
-    const l = lines[lines.length - 1];
-    if (l && r.top < l.bottom - 1 && r.bottom > l.top + 1) { l.top = Math.min(l.top, r.top); l.bottom = Math.max(l.bottom, r.bottom); }
-    else lines.push({ top: r.top, bottom: r.bottom });
+  const { pitch, bodyH, half } = geo;
+  // 줄 상자 아래 끝이 이 선을 넘으면 = 글자 아래 끝이 본문 칸을 넘으면 (줄 위아래 반쪽 여백 half)
+  const unit = bodyH + 2 * half;
+  const lead = dom.getBoundingClientRect().top - host.getBoundingClientRect().top;
+  const sig = [n, unit, pitch, lead].join();
+  if (sig === floatSig) return;
+  floatSig = sig;
+  let html = '';
+  for (let k = 0; k < n; k++) {
+    html += `<div class="spf" style="height:${k ? unit : unit + lead}px"></div><div class="gapf" style="height:${pitch - unit}px"></div>`;
   }
-  return lines;
-}
-
-// 화면 위치 y에서 시작하는 줄의 첫 글자 → 문서 위치 (화면 밖에서도 되도록 글자 위치를 직접 잰다)
-function lineStartPos(view, nodes, range, lineTop) {
-  const lens = nodes.map((n) => n.textContent.length);
-  const total = lens.reduce((a, b) => a + b, 0);
-  const at = (i) => { let k = 0; while (i >= lens[k]) { i -= lens[k]; k++; } return [nodes[k], i]; };
-  const topOf = (i) => {
-    const [n, o] = at(i);
-    range.setStart(n, o); range.setEnd(n, o + 1);
-    const rs = range.getClientRects();
-    return rs.length ? rs[rs.length - 1].top : -Infinity;
-  };
-  let lo = 0, hi = total - 1;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (topOf(mid) >= lineTop - 1) hi = mid; else lo = mid + 1; }
-  const [n, o] = at(lo);
-  try { return view.posAtDOM(n, o); } catch { return null; }
+  host.innerHTML = html;
 }
 
 function relayout() {
-  const t0 = performance.now();
-  try { relayoutInner(); } finally { lastCost = performance.now() - t0; }
-}
-function relayoutInner() {
   if (!geo || !app.editor) return;
   const view = app.editor.view;
   const dom = view.dom;
-  // 한글 입력(조합) 중에는 건드리지 않는다
-  if (view.composing) { schedule(300); return; } // 조합이 끝나면(compositionend) 바로 다시 잰다
-  // 끼워 둔 빈 칸을 모두 걷어 낸 상태에서 잰다 (글꼴·내용이 바뀌면 줄 시작 위치가 달라지므로)
-  if (key.getState(view.state).find().length) view.dispatch(view.state.tr.setMeta(key, []).setMeta('addToHistory', false));
-  const base = dom.getBoundingClientRect().top;
-  const natural = (y) => y - base;
-  const range = document.createRange();
-
-  const items = []; // {pos | lazy, block, top, lh, fs}
-  view.state.doc.descendants((node, pos) => {
-    if (!node.isTextblock && !node.isAtom) return true;
-    const el = view.nodeDOM(pos);
-    if (!(el instanceof HTMLElement)) return false;
-    const cs = getComputedStyle(el);
-    const fs = parseFloat(cs.fontSize);
-    const lh = parseFloat(cs.lineHeight) || fs * 1.6;
-    const nodes = node.isTextblock && node.content.size ? textNodes(el) : [];
-    const lines = nodes.length ? linesOf(nodes, range) : [];
-    if (!lines.length) {
-      const r = el.getBoundingClientRect();
-      items.push({ pos, block: true, top: natural(r.top), lh: Math.max(r.height, 1), fs: Math.min(fs, r.height || fs) });
-      return false;
-    }
-    lines.forEach((l, i) => {
-      const top = natural((l.top + l.bottom) / 2 - lh / 2);
-      if (i === 0) items.push({ pos, block: true, top, lh, fs });
-      else items.push({ lazy: () => lineStartPos(view, nodes, range, l.top), block: false, top, lh, fs });
-    });
-    return false;
-  });
-
-  const { pitch, bodyH, half } = geo;
-  let shift = 0, page = 0, bottom = 0;
-  const specs = [];
-  for (const it of items) {
-    const t = it.top + shift;
-    let k = Math.max(page, Math.floor((t + it.lh / 2) / pitch));
-    // 글자 아래 끝이 이 쪽 본문 칸 안에 들어오는가 (한글처럼 마지막 줄은 글자 높이만 있으면 된다)
-    const glyphBottom = t + (it.lh - it.fs) / 2 + it.fs;
-    const firstOnPage = t <= k * pitch + 1;
-    if (glyphBottom > k * pitch + half + bodyH + 0.5 && !firstOnPage) {
-      // 다음 쪽 본문 첫 줄 자리: 글자 윗선이 본문 칸 위쪽에 오도록
-      const target = (k + 1) * pitch + half - (it.lh - it.fs) / 2;
-      const hgt = Math.max(1, Math.round((target - t) * 2) / 2);
-      const pos = it.lazy ? it.lazy() : it.pos;
-      if (pos != null) specs.push({ pos, block: it.block, h: hgt });
-      shift += hgt;
-      k += 1;
-    }
-    page = k;
-    bottom = Math.max(bottom, it.top + shift + it.lh);
+  // 쪽 수: 원고 끝이 몇째 쪽에 닿는가. 쪽이 늘면 띄움을 하나 더 세우고 다시 잰다
+  let n = Math.max(0, $('#pvFloats .gapf') ? $('#pvFloats').children.length / 2 : 0);
+  let pages = 1;
+  for (let i = 0; i < 4; i++) {
+    setFloats(view, n);
+    const base = dom.getBoundingClientRect().top;
+    const lastEl = dom.lastElementChild;
+    const bottom = lastEl ? lastEl.getBoundingClientRect().bottom - base : 0;
+    pages = Math.max(1, Math.floor(Math.max(0, bottom - 1) / geo.pitch) + 1);
+    if (pages - 1 === n) break;
+    n = pages - 1;
   }
-  const pages = Math.max(1, Math.floor(Math.max(0, bottom - 1) / pitch) + 1);
   drawSheets(pages);
-
-  if (!specs.length) return;
-  view.dispatch(view.state.tr.setMeta(key, specs.map((s) => gapWidget(s.pos, s.h, s.block))).setMeta('addToHistory', false));
 }
 
 let drawn = '';

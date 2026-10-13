@@ -393,8 +393,12 @@ details summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
 .paper.pv .ProseMirror p { text-indent: var(--pv-indent); margin: 0 0 var(--pv-para); }
 .paper.pv .ProseMirror h1, .paper.pv .ProseMirror h2, .paper.pv .ProseMirror h3 { line-height: var(--pv-line); }
 .paper.pv .ProseMirror p.is-editor-empty:first-child::before { text-indent: var(--pv-indent); }
-.pg-gap { display: inline-block; width: 100%; vertical-align: top; user-select: none; pointer-events: none; }
-.pg-gap.block { display: block; }
+/* 쪽 나누기 띄움 기둥 (pageview.js): 원고 앞에 두고, 줄이 쪽 사이 자리를 비켜 가게 한다 */
+#pvFloats { height: 0; pointer-events: none; user-select: none; }
+#pvFloats > div { float: right; clear: right; width: 0; }
+#pvFloats > .gapf { width: 100%; }
+/* 줄이 아닌 덩어리(구분선·표 등)도 띄움을 비켜 가게 */
+.paper.pv .ProseMirror > :not(p):not(h1):not(h2):not(h3):not(h4):not(blockquote):not(ul):not(ol) { display: flow-root; }
 body.pageview .paper-scroll { padding: 16px 16px 48px; overflow-x: auto; }
 .statusbar select.pvzoom { border: 1px solid var(--line); background: var(--paper); border-radius: 6px; font-size: 12px; padding: 1px 4px; color: var(--ink2); }
 
@@ -965,6 +969,9 @@ body.syn-open.syn-left .paper-scroll { margin-right: 0; margin-left: 272px; }
 .syn-mrow { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink2); }
 .syn-mrow select { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); padding: 3px 4px; font-size: 12px; color: var(--ink); }
 .syn-prov { border: 1px solid var(--line); border-radius: 6px; background: var(--paper); padding: 3px 4px; font-size: 12px; }
+.syn-modes { display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.syn-modes button { flex: 1; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink2); font-size: 12px; cursor: pointer; }
+.syn-modes button[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); background: var(--accent-bg, rgba(0,0,0,.06)); font-weight: 600; }
 .syn-word { padding: 10px 12px 4px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .syn-word .syn-t { font-size: 17px; font-weight: 600; }
 .syn-word small { color: var(--ink2); font-size: 12px; }

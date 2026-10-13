@@ -524,25 +524,29 @@ await test('쪽 보기: 위아래 화살표가 쪽 사이를 한 줄씩 넘는�
   await ctx.close();
 });
 
-await test('쪽 보기: 쪽 마지막 줄에서 글을 써도 줄이 잘못된 자리에 보였다 튀지 않는다', async () => {
+await test('쪽 보기: 쪽 마지막 줄에서 한글을 조합하는 동안에도 넘친 글자가 쪽 아래 여백에 보이지 않고 바로 다음 쪽에 놓인다', async () => {
   const { ctx, page } = await boot({ pageView: true });
   await run(page, `A.app.editor.commands.setContent('<p>' + arg.repeat(30) + '</p>');`, PARA);
   await page.waitForTimeout(800);
-  await run(page, `const g = document.querySelector('.pg-gap'); const pos = A.app.editor.view.posAtDOM(g, 0); A.app.editor.chain().focus().setTextSelection(pos - 1).run();`);
-  const ys = [];
-  for (let i = 0; i < 8; i++) {
-    await page.keyboard.type('가');
-    // 다음 화면을 그리기 직전 상태
-    const now = await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
-    void now;
-    ys.push(await caretY(page));
+  // 1쪽 마지막 줄 끝 두 글자 앞에 커서, 화면을 그릴 때마다 커서 높이를 적는다
+  await run(page, `const v = A.app.editor.view; const g = document.querySelector('#pvFloats .gapf').getBoundingClientRect();
+    let lo = 1, hi = v.state.doc.content.size - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (v.coordsAtPos(m).top >= g.bottom - 2) hi = m; else lo = m + 1; }
+    A.app.editor.chain().focus().setTextSelection(lo - 2).run();
+    window.__gap = [g.top - v.dom.getBoundingClientRect().top, g.bottom - v.dom.getBoundingClientRect().top];
+    window.__ys = []; const tick = () => { const s = getSelection(); if (s.rangeCount) window.__ys.push(s.getRangeAt(0).getBoundingClientRect().bottom - v.dom.getBoundingClientRect().top); window.__raf = requestAnimationFrame(tick); }; tick();`);
+  const cdp = await ctx.newCDPSession(page);
+  for (const s of [['ㄱ', '가', '각'], ['ㄴ', '나', '난'], ['ㄷ', '다', '닫'], ['ㄹ', '라', '랄'], ['ㅁ', '마', '맘'], ['ㅂ', '바', '밥'], ['ㄱ', '가', '각'], ['ㄴ', '나', '난']]) {
+    for (const t of s) { await cdp.send('Input.imeSetComposition', { text: t, selectionStart: 1, selectionEnd: 1 }); await page.waitForTimeout(50); }
+    await cdp.send('Input.insertText', { text: s[2] });
+    await page.waitForTimeout(30);
   }
-  await page.waitForTimeout(500);
-  const settled = await caretY(page);
-  // 화면에 그려진 자리가 나중 자리와 같아야 한다 (쪽 아래 여백에 잠깐 보이는 일 없이)
-  assert(ys[ys.length - 1] === settled, `마지막 입력 직후 ${ys.join(',')} / 나중 ${settled}`);
-  const inMargin = ys.filter((y, i) => i && ys[i - 1] < y && y - ys[i - 1] < 100 && y > 760 && y < 1050);
-  assert(!inMargin.length, '쪽 아래 여백에 그려진 줄: ' + ys.join(','));
+  await page.waitForTimeout(300);
+  const r = await page.evaluate(() => { cancelAnimationFrame(window.__raf); return { ys: window.__ys, gap: window.__gap }; });
+  const bad = r.ys.filter((y) => y > r.gap[0] + 2 && y < r.gap[1] - 2);
+  assert(r.ys.some((y) => y > r.gap[1]), '다음 쪽으로 넘어가지 않음');
+  assert(!bad.length, `쪽 사이 여백에 그려진 프레임 ${bad.length}개 (여백 ${r.gap.map(Math.round)})`);
+  const txt = await run(page, 'return A.app.editor.state.doc.textContent;');
+  assert(txt.includes('각난닫랄맘밥각난'), '조합한 글자가 그대로 들어가야 함');
   await ctx.close();
 });
 
@@ -557,6 +561,32 @@ await test('쪽 보기(폭 맞춤): 교정 여백이 생겼다 없어져도 쪽 
   const rail = await page.evaluate(() => document.body.classList.contains('has-proof-rail'));
   const w1 = await page.evaluate(() => getComputedStyle(document.getElementById('paper')).getPropertyValue('--pv-w'));
   assert(w0 === w1, `쪽 폭 ${w0} → ${w1} (교정 여백 ${rail})`);
+  await ctx.close();
+});
+
+// ---------------- 유의어 창 ----------------
+await test('유의어 창: 구절 통째로 바꾸기는 고른 구절을 새로 쓴 표현으로 바꾸고, 서식을 지킨다 (AI는 흉내)', async () => {
+  const { ctx, page } = await boot({ synProvider: 'openai', ai: { provider: 'openai', models: { openai: 'gpt-test-mini' } } });
+  const asked = [];
+  await ctx.route('https://api.openai.com/**', (r) => {
+    if (r.request().method() !== 'POST') return r.fulfill({ json: { data: [{ id: 'gpt-test-mini' }] } });
+    const c = JSON.parse(r.request().postData()).messages.map((m) => m.content).join('\n');
+    const phrase = c.includes('통째로');
+    asked.push((phrase ? 'phrase:' : 'word:') + c.match(/대상: «(.*?)»/)[1]);
+    r.fulfill({ json: { choices: [{ message: { content: JSON.stringify(phrase ? { items: [{ word: '통닭의 아름다움' }, { word: '닭튀김이 지닌 멋', note: '풀어 씀' }] } : { lemma: '미학', items: [{ word: '아름다움' }], antonyms: [] }) } }] } });
+  });
+  await page.evaluate(() => localStorage.setItem('nw-openai-key', 'sk-test'));
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(600);
+  await run(page, `A.app.editor.commands.setContent('<p>오늘의 주제는 <em>치킨의 미학</em>이다.</p>');`);
+  await run(page, `(await import('/src/synonym.js')).toggleSynonyms(true);`);
+  await page.click('#synPanel [data-mode=phrase]');
+  await run(page, `const ed = A.app.editor; let f; ed.state.doc.descendants((n, p) => { if (n.isText && n.text.includes('치킨의 미학')) f = p + n.text.indexOf('치킨의 미학'); }); ed.chain().focus().setTextSelection({ from: f, to: f + 6 }).run();`);
+  await page.waitForSelector('#synPanel .syn-item[data-w="통닭의 아름다움"]');
+  await page.click('#synPanel .syn-item[data-w="통닭의 아름다움"]');
+  await page.waitForTimeout(300);
+  const html = await run(page, 'return A.app.editor.getHTML();');
+  assert(html === '<p>오늘의 주제는 <em>통닭의 아름다움</em>이다.</p>', html);
+  assert(asked[0] === 'phrase:치킨의 미학', asked.join());
   await ctx.close();
 });
 
