@@ -1019,6 +1019,7 @@ export async function syncNow({ quiet = false } = {}) {
     if (!quiet && isOpen(pid)) toast(server ? '동기화 서버에 저장했어요.' : '구글 드라이브에 저장했어요.');
   } catch (e) {
     if (isOpen(pid)) app.syncPending = true;
+    if (e.reauth) { pill('err', '☁ 다시 연결해 주세요'); if (!quiet) toast(e.message, 6000); return; }
     pill('err', '☁ 동기화 안 됨');
     if (!quiet) toast(e.message, 6000);
     console.warn(e);

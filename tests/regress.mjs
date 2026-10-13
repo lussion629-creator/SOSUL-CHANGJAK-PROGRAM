@@ -500,6 +500,66 @@ await test('F07 대화상자 결과는 확인·취소·프로그램 닫기·바�
   await ctx.close();
 });
 
+// ---------------- 쪽 보기 ----------------
+const PARA = '모든 것이 나였습니다. 나에 대한 일은 어떤 것도 나와 무관하지 않았습니다. 시야에 닿는 곳마다 내가 있었습니다. ';
+const caretY = (page) => run(page, 'const v = A.app.editor.view; return Math.round(v.coordsAtPos(v.state.selection.head).top - v.dom.getBoundingClientRect().top);');
+
+await test('쪽 보기: 위아래 화살표가 쪽 사이를 한 줄씩 넘는다 (맨 끝·맨 앞으로 튀지 않음)', async () => {
+  const { ctx, page } = await boot({ pageView: true });
+  await run(page, `A.app.editor.commands.setContent(Array.from({ length: 12 }, (_, i) => '<p>' + i + ' ' + arg.repeat(4) + '</p>').join('')); A.app.editor.chain().focus().setTextSelection(3).run();`, PARA);
+  await page.waitForTimeout(800);
+  let prev = await caretY(page);
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press('ArrowDown'); await page.waitForTimeout(20);
+    const y = await caretY(page);
+    assert(y > prev && y - prev < 400, `아래 ${i}: ${prev} → ${y}`);
+    prev = y;
+  }
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press('ArrowUp'); await page.waitForTimeout(20);
+    const y = await caretY(page);
+    assert(y < prev && prev - y < 400, `위 ${i}: ${prev} → ${y}`);
+    prev = y;
+  }
+  await ctx.close();
+});
+
+await test('쪽 보기: 쪽 마지막 줄에서 글을 써도 줄이 잘못된 자리에 보였다 튀지 않는다', async () => {
+  const { ctx, page } = await boot({ pageView: true });
+  await run(page, `A.app.editor.commands.setContent('<p>' + arg.repeat(30) + '</p>');`, PARA);
+  await page.waitForTimeout(800);
+  await run(page, `const g = document.querySelector('.pg-gap'); const pos = A.app.editor.view.posAtDOM(g, 0); A.app.editor.chain().focus().setTextSelection(pos - 1).run();`);
+  const ys = [];
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.type('가');
+    // 다음 화면을 그리기 직전 상태
+    const now = await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
+    void now;
+    ys.push(await caretY(page));
+  }
+  await page.waitForTimeout(500);
+  const settled = await caretY(page);
+  // 화면에 그려진 자리가 나중 자리와 같아야 한다 (쪽 아래 여백에 잠깐 보이는 일 없이)
+  assert(ys[ys.length - 1] === settled, `마지막 입력 직후 ${ys.join(',')} / 나중 ${settled}`);
+  const inMargin = ys.filter((y, i) => i && ys[i - 1] < y && y - ys[i - 1] < 100 && y > 760 && y < 1050);
+  assert(!inMargin.length, '쪽 아래 여백에 그려진 줄: ' + ys.join(','));
+  await ctx.close();
+});
+
+await test('쪽 보기(폭 맞춤): 교정 여백이 생겼다 없어져도 쪽 크기가 바뀌지 않는다', async () => {
+  const { ctx, page } = await boot({ pageView: true, proof: true });
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await run(page, `A.app.editor.commands.setContent('<p>바른 문장입니다.</p>');`);
+  await page.waitForTimeout(1000);
+  const w0 = await page.evaluate(() => getComputedStyle(document.getElementById('paper')).getPropertyValue('--pv-w'));
+  await run(page, `A.app.editor.commands.setContent('<p>그는 몇일 동안 되요 라고 말했다 .</p>', { emitUpdate: true });`);
+  await page.waitForTimeout(1500);
+  const rail = await page.evaluate(() => document.body.classList.contains('has-proof-rail'));
+  const w1 = await page.evaluate(() => getComputedStyle(document.getElementById('paper')).getPropertyValue('--pv-w'));
+  assert(w0 === w1, `쪽 폭 ${w0} → ${w1} (교정 여백 ${rail})`);
+  await ctx.close();
+});
+
 export { browser, boot, run, mkProject, typeInto, pressDialog, test, assert, results };
 if (!process.env.NO_CLOSE) {
   await browser.close();

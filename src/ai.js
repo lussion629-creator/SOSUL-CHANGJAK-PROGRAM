@@ -164,6 +164,16 @@ export async function listModels(p, key = aiKey(p), signal) {
   const json = await call(p, `${ANTHROPIC}/models?limit=100`, { headers: headers(p, key) }, signal);
   return (json.data || []).map((m) => ({ id: m.id, name: m.display_name || '' }));
 }
+// 불러온 모델 목록은 설정에 남겨 두고(모델 이름뿐, 키는 아님) 모델 고르는 칸에서 바로 쓴다
+export function savedModels(p) { return aiCfg().lists?.[p] || []; }
+export async function modelChoices(p, { refresh = false, signal } = {}) {
+  const a = aiCfg();
+  if (!refresh && a.lists?.[p]?.length) return a.lists[p];
+  const list = (await listModels(p, aiKey(p), signal)).map((m) => m.id);
+  (a.lists ||= {})[p] = list;
+  saveSettings();
+  return list;
+}
 // 목록에서 값싸고 빠른 모델을 먼저 권한다
 export const lightFirst = (list) => list.find((m) => /mini|haiku|flash|lite|small/i.test(m.id) && !/nano|preview|exp/i.test(m.id)) || list[0];
 
@@ -197,8 +207,17 @@ export async function showAiSettings({ back } = {}) {
       const prov = () => f.querySelector('input[name=provider]:checked').value;
       const keyIn = (p) => f[`key_${p}`].value.trim() || aiKey(p);
       f.addEventListener('change', (e) => {
-        if (e.target.name === 'provider') { f.querySelectorAll('.ai-panel').forEach((s) => { s.hidden = s.dataset.p !== prov(); }); out.textContent = ''; }
+        if (e.target.name === 'provider') { f.querySelectorAll('.ai-panel').forEach((s) => { s.hidden = s.dataset.p !== prov(); }); out.textContent = ''; autoList(); }
       });
+      // 키가 있으면 모델 목록을 저절로 불러온다 (모델 칸을 누르면 고를 수 있게)
+      const autoList = () => {
+        const p = prov();
+        const dl = $(`#aiList_${p}`);
+        const saved = savedModels(p);
+        if (saved.length) dl.innerHTML = [...new Set([...saved, ...PROVIDERS[p].suggest])].map((id) => `<option value="${h(id)}">`).join('');
+        if (keyIn(p) && !dl.dataset.loaded) { dl.dataset.loaded = '1'; f.querySelector(`[data-a=list][data-p=${p}]`)?.click(); }
+      };
+      setTimeout(autoList, 0);
       let busy = null;
       f.addEventListener('click', async (e) => {
         const b = e.target.closest('[data-a]');
@@ -209,6 +228,7 @@ export async function showAiSettings({ back } = {}) {
           out.textContent = '모델 목록을 불러오는 중…';
           try {
             const list = await listModels(p, keyIn(p), busy.signal);
+            (a.lists ||= {})[p] = list.map((m) => m.id);
             $(`#aiList_${p}`).innerHTML = [...new Set([...list.map((m) => m.id), ...PROVIDERS[p].suggest])].map((id) => {
               const m = list.find((x) => x.id === id);
               return `<option value="${h(id)}">${h(m?.name || '')}</option>`;

@@ -1,6 +1,6 @@
 // 데스크톱 앱(Windows·macOS): 앱 화면을 이 컴퓨터 안의 작은 서버로 띄운다.
 // 주소가 늘 http://localhost:47615 로 같아서 원고(IndexedDB)가 그대로 남고, 구글 로그인도 이 주소를 승인하면 된다.
-const { app, BrowserWindow, shell, ipcMain, dialog, session } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, dialog, session, Menu } = require('electron');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -200,6 +200,10 @@ if (!app.requestSingleInstanceLock()) {
     const OK = new Set(['clipboard-read', 'clipboard-sanitized-write', 'fullscreen']);
     session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d) => cb(OK.has(perm) && isApp(d?.requestingUrl || wc.getURL())));
     session.defaultSession.setPermissionCheckHandler((wc, perm, origin) => OK.has(perm) && isApp(origin));
+    // 숨은 기본 메뉴의 단축키(Ctrl+R 새로 고침, Ctrl+0·±확대, Ctrl+W 닫기 등)가 앱의 단축키 설정보다 먼저 먹지 않게 없앤다.
+    // 맥은 복사·붙여넣기(⌘C·⌘V)가 '편집' 메뉴에 달려 있어 앱·편집 메뉴만 남긴다.
+    if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+    else Menu.setApplicationMenu(null);
     createWindow();
     updater.start({ getWin: () => win, beforeQuit: saveForQuit });
     app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

@@ -1,7 +1,7 @@
 // 유의어 창: 원고 옆(왼쪽·오른쪽)에 붙여 두면 커서가 있는 낱말이나 고른 글자의 유의어를
 // 고른 AI(GPT·Claude·Gemini)에게 바로 물어 보여 준다. 누르면 그 낱말을 바꾼다.
 import { app, saveSettings } from './app.js';
-import { PROVIDERS, aiKey, modelOf, askJSON, aiMissing, showAiSettings } from './ai.js';
+import { PROVIDERS, aiKey, modelOf, askJSON, showAiSettings, savedModels, modelChoices, lightFirst } from './ai.js';
 import { applyPageView, isPageView } from './pageview.js';
 import { $, h, toast } from './ui.js';
 
@@ -20,6 +20,14 @@ export function synProvider() {
   const p = app.settings.synProvider;
   if (PROVIDERS[p]) return p;
   return ORDER.find((x) => aiKey(x) && modelOf(x)) || app.settings.ai?.provider || 'openai';
+}
+
+// 유의어에 쓸 모델: 유의어 창에서 따로 고를 수 있다 (안 고르면 설정 → AI 글 모델의 모델)
+export const synModel = (p = synProvider()) => app.settings.synModels?.[p] || modelOf(p);
+function synMissing(p) {
+  if (!aiKey(p)) return `${PROVIDERS[p].short} API 키가 없어요. 아래 단추로 넣어 주세요.`;
+  if (!synModel(p)) return `${PROVIDERS[p].short} 모델을 골라 주세요. 위 모델 칸에서 ‘목록 불러오기’를 누르면 고를 수 있어요.`;
+  return '';
 }
 
 const SCHEMA = {
@@ -88,6 +96,7 @@ function build() {
       <button type="button" class="icon-btn syn-side" title="반대쪽으로 옮기기" aria-label="반대쪽으로 옮기기">⇄</button>
       <button type="button" class="icon-btn syn-close" title="닫기" aria-label="유의어 창 닫기">✕</button>
     </div>
+    <div class="syn-mrow"><span>모델</span><select class="syn-model" aria-label="AI 모델"></select></div>
     <div class="syn-word" aria-live="polite"></div>
     <div class="syn-list"></div>
     <p class="syn-foot hint">커서를 낱말에 두거나 글자를 고르면 바로 찾아요. 누르면 그 말로 바꿔요.</p>`;
@@ -95,7 +104,16 @@ function build() {
   el.querySelector('.syn-close').addEventListener('click', () => toggleSynonyms(false));
   el.querySelector('.syn-side').addEventListener('click', () => { app.settings.synSide = side() === 'left' ? 'right' : 'left'; saveSettings(); layout(); });
   const sel = el.querySelector('.syn-prov');
-  sel.addEventListener('change', () => { app.settings.synProvider = sel.value; saveSettings(); lookup(true); });
+  sel.addEventListener('change', () => { app.settings.synProvider = sel.value; saveSettings(); fillModels(); lookup(true); });
+  const ms = el.querySelector('.syn-model');
+  ms.addEventListener('change', async () => {
+    const p = synProvider(), v = ms.value;
+    if (v === '__load') { await fillModels(true); return; }
+    if (v === '__set') { fillModels(); await showAiSettings(); fillModels(); lookup(true); return; }
+    (app.settings.synModels ||= {})[p] = v;
+    saveSettings();
+    lookup(true);
+  });
   el.addEventListener('mousedown', (e) => { if (e.target.closest('[data-w]')) e.preventDefault(); }); // 원고의 커서·선택을 지킨다
   el.addEventListener('click', (e) => {
     const b = e.target.closest('[data-w]');
@@ -115,7 +133,40 @@ function layout() {
   el.hidden = !on;
   el.classList.toggle('left', side() === 'left');
   el.querySelector('.syn-prov').value = synProvider();
+  if (on) fillModels();
   if (isPageView()) applyPageView();
+}
+
+// 모델 칸: 지금 모델 + 불러온 목록 + 권장 모델, 맨 끝에 '목록 불러오기'·'AI 설정'
+let loading = false;
+async function fillModels(refresh = false) {
+  const el = $('#synPanel .syn-model');
+  if (!el) return;
+  const p = synProvider();
+  const draw = (note = '') => {
+    const cur = synModel(p);
+    const ids = [...new Set([cur, ...savedModels(p), ...PROVIDERS[p].suggest].filter(Boolean))];
+    el.innerHTML = (cur ? '' : '<option value="">모델을 골라 주세요</option>')
+      + ids.map((id) => `<option value="${h(id)}">${h(id)}</option>`).join('')
+      + `<option value="__load">${note || (aiKey(p) ? '↻ 목록 불러오기' : '↻ 목록 불러오기 (키 필요)')}</option><option value="__set">⚙ AI 설정…</option>`;
+    el.value = cur || '';
+  };
+  draw();
+  // 키가 있는데 목록이 아직 없으면 저절로 한 번 불러온다
+  if (!aiKey(p) || loading || (!refresh && savedModels(p).length)) return;
+  loading = true;
+  draw('불러오는 중…');
+  try {
+    const list = await modelChoices(p, { refresh: true });
+    // 아직 고른 모델이 없으면 빠르고 값싼 모델을 골라 둔다 (유의어는 빨라야 하므로)
+    if (!synModel(p) && list.length) {
+      (app.settings.synModels ||= {})[p] = lightFirst(list.map((id) => ({ id }))).id;
+      saveSettings();
+      lookup(true);
+    }
+    draw();
+    if (refresh) toast(`${PROVIDERS[p].short} 모델 ${list.length}개를 불러왔어요.`);
+  } catch (e) { draw(); toast(e.message, 5000); } finally { loading = false; }
 }
 
 export function toggleSynonyms(on = !isOpen()) {
@@ -162,9 +213,10 @@ async function lookup(force) {
   if (!force && target && target.text === t.text && target.sentence === t.sentence) { target = t; return; }
   target = t;
   const p = synProvider();
-  const miss = aiMissing(p);
+  const miss = synMissing(p);
   if (miss) { head(t.text); render(`<p class="hint">${h(miss)}</p><button type="button" class="small" data-ai-set>AI 키·모델 넣기</button>`); return; }
-  const key = `${p}|${modelOf(p)}|${t.text}|${t.sentence}`;
+  const model = synModel(p);
+  const key = `${p}|${model}|${t.text}|${t.sentence}`;
   if (cache.has(key)) { show(cache.get(key), t.text); return; }
   const prev = lastByWord.get(t.text);
   if (prev) show(prev, t.text); else { head(t.text); render('<p class="syn-wait">찾는 중…</p>'); }
@@ -172,7 +224,7 @@ async function lookup(force) {
   ctrl = new AbortController();
   const my = ++seq;
   try {
-    const r = await askJSON(prompt(t.text, t.sentence), SCHEMA, { signal: ctrl.signal, provider: p });
+    const r = await askJSON(prompt(t.text, t.sentence), SCHEMA, { signal: ctrl.signal, provider: p, model });
     cache.set(key, r);
     lastByWord.set(t.text, r);
     if (cache.size > 300) cache.delete(cache.keys().next().value);

@@ -69,13 +69,16 @@ export function disconnect() {
   emit();
 }
 
+// 로그인이 만료되면 구글 창을 저절로 띄우지 않는다 (자동 동기화 중에 창이 뜨지 않게).
+// 사용자가 직접 '연결'·'불러오기' 등을 누를 때만 connect()로 창을 연다.
+export class ReauthError extends Error { constructor() { super('구글 드라이브 연결이 끝났어요. 위쪽 ☁ 표시를 눌러 다시 연결해 주세요.'); this.reauth = true; } }
 async function api(url, init = {}) {
   if (!status().connected) {
     if (!clientId) throw new Error('드라이브가 설정되지 않았습니다.');
-    await connect({ silent: true });
+    throw new ReauthError();
   }
   const res = await fetch(url, { ...init, headers: { Authorization: `Bearer ${token.access_token}`, ...(init.headers || {}) } });
-  if (res.status === 401) { token = null; emit(); throw new Error('구글 로그인이 만료되었습니다. 다시 연결해 주세요.'); }
+  if (res.status === 401) { token = null; try { sessionStorage.removeItem('gd-token'); } catch { /* 무시 */ } emit(); throw new ReauthError(); }
   if (!res.ok) throw new Error(`드라이브 오류 ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return res;
 }

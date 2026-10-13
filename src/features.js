@@ -215,6 +215,7 @@ export async function showExport() {
     const out = await exportBook(f.fmt.value, book, opt);
     download(out.blob, out.name);
     if (f.toDrive?.checked) {
+      if (!G.status().connected) await G.connect(); // 직접 고른 일이므로 필요하면 연결 창을 연다
       const res = await G.uploadFile(out.blob, out.name, { asGoogleDoc: f.fmt.value === 'docx' });
       toast(`드라이브에도 저장했어요.${res.webViewLink ? '' : ''}`);
     } else toast(`${out.name} 파일을 만들었어요.`);
@@ -605,7 +606,16 @@ function useTarget(t) {
   setSyncState('', '');
   refreshSyncPill();
 }
-export const showSync = () => (isOffline() ? showStorage() : usingServer() ? showServer() : showDrive());
+export const showSync = () => {
+  if (isOffline()) return showStorage();
+  if (usingServer()) return showServer();
+  // 드라이브 연결이 끝난 상태에서 ☁ 표시를 누르면 (사용자가 누른 것이므로) 바로 다시 연결해 동기화한다
+  const st = G.status();
+  if (st.configured && st.hadToken && !st.connected) {
+    return G.connect({ silent: true }).then(() => syncNow(), (e) => toast('다시 연결하지 못했습니다: ' + e.message, 6000));
+  }
+  return showDrive();
+};
 export const syncImport = () => (isOffline() ? showStorage() : usingServer() ? serverImport() : driveImport());
 
 // ---------- 저장 방식 고르기: 처음 켤 때 한 번 묻고, 설정 → 저장 방식에서 언제든 바꾼다 ----------

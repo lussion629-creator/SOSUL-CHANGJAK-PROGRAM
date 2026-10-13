@@ -1,7 +1,7 @@
 // 쪽 보기: 편집하면서 원고를 쪽 설정(용지·여백·글자)대로 한 쪽씩 나눠 보여 준다.
 // 줄마다 위치를 재서, 쪽 끝에 닿는 줄 앞에 빈 칸(다음 쪽까지의 거리)을 끼워 넣는 방식이다.
 import { Extension } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { app, saveSettings } from './app.js';
 import { layoutOf, bodyBox, mm2px, pt2px, textCss, numSide } from './layout.js';
@@ -23,7 +23,14 @@ export const PageBreaks = Extension.create({
           return set.map(tr.mapping, tr.doc);
         },
       },
-      props: { decorations(state) { return key.getState(state); } },
+      props: {
+        decorations(state) { return key.getState(state); },
+        // 쪽 사이 빈칸을 건너 위아래로 옮기기: 브라우저에 맡기면 빈칸에서 맨 끝·맨 앞으로 튄다
+        handleKeyDown(view, e) {
+          if (!geo || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.ctrlKey || e.metaKey || e.altKey || view.composing) return false;
+          return crossGap(view, e.key === 'ArrowDown' ? 1 : -1, e.shiftKey);
+        },
+      },
     })];
   },
 });
@@ -40,6 +47,44 @@ function gapWidget(pos, h, block) {
 }
 
 export const isPageView = () => !!app.settings.pageView;
+
+// 위아래 화살표가 쪽 사이 빈칸(pg-gap)을 건너야 할 때만 직접 옮긴다 (그 밖에는 브라우저 기본 동작)
+let goalX = null, goalAt = -1;
+function crossGap(view, dir, extend) {
+  const sel = view.state.selection;
+  const head = sel.head;
+  let c;
+  try { c = view.coordsAtPos(head); } catch { return false; }
+  const lh = Math.max(8, c.bottom - c.top);
+  const gaps = [...view.dom.querySelectorAll('.pg-gap')].map((g) => g.getBoundingClientRect()).filter((r) => r.height > 0);
+  // 다음(이전) 줄로 갈 자리
+  let y = dir > 0 ? c.bottom + lh / 2 : c.top - lh / 2;
+  const hit = gaps.find((r) => (dir > 0 ? r.top < y + lh / 2 && r.bottom > c.bottom - 1 : r.bottom > y - lh / 2 && r.top < c.top + 1));
+  if (!hit) { goalX = null; return false; }
+  y = dir > 0 ? hit.bottom + lh / 2 : hit.top - lh / 2;
+  // 같은 세로 이동이 이어지면 처음 가로 위치를 지킨다
+  const x = goalAt === head && goalX != null ? goalX : c.left;
+  const box = view.dom.getBoundingClientRect();
+  const found = view.posAtCoords({ left: Math.min(Math.max(x, box.left + 1), box.right - 1), top: y });
+  if (!found) return false;
+  const pos = found.pos;
+  if (pos === head) return false;
+  const $a = extend ? sel.$anchor : view.state.doc.resolve(pos);
+  const tr = view.state.tr.setSelection(TextSelection.between($a, view.state.doc.resolve(pos)));
+  view.dispatch(tr.scrollIntoView());
+  goalX = x; goalAt = pos;
+  return true;
+}
+
+// 교정 여백(교정 모드)·주석 여백이 생길 수 있으면 그 폭 (ui.js symRails와 같은 기준: 넓으면 양쪽 대칭)
+function railReserve(w) {
+  // 교정 여백은 글을 쓰는 동안 수시로 생겼다 없어지므로 교정 모드면 늘 자리를 둔다. 주석 여백은 주석이 있을 때만(자주 바뀌지 않음)
+  const proof = app.settings.proof !== false && app.settings.proofRail !== false;
+  const anno = document.body.classList.contains('has-anno-rail');
+  if (!proof && !anno) return 0;
+  if (w >= 1120) return 536;
+  return w >= 860 ? 268 : 0;
+}
 
 let geo = null; // 지금 쪽 크기 (px)
 let last = '';
@@ -59,7 +104,8 @@ export function applyPageView() {
   }
   const L = layoutOf();
   const ps = $('#paperScroll'), pcs = getComputedStyle(ps);
-  const avail = Math.max(240, ps.clientWidth - parseFloat(pcs.paddingLeft) - parseFloat(pcs.paddingRight)); // 주석 여백 자리는 뺀다
+  // 폭 맞춤: 교정·주석 여백이 나타났다 사라져도 쪽 크기가 바뀌지 않게, 여백이 생길 수 있으면 늘 그 자리를 빼 두고 잰다
+  const avail = Math.max(240, ps.clientWidth - Math.max(parseFloat(pcs.paddingLeft) + parseFloat(pcs.paddingRight), railReserve(ps.clientWidth)));
   const W = mm2px(L.w);
   const z = app.settings.pvZoom === 'fit' || !app.settings.pvZoom ? Math.min(1.35, avail / W) : +app.settings.pvZoom / 100;
   const t = textCss(L, z);
@@ -92,9 +138,15 @@ export function applyPageView() {
 }
 
 let timer, raf;
+let lastCost = 0; // 마지막으로 잰 데 걸린 시간 (ms)
 export function schedule(delay = 250) {
   if (!geo) return;
   clearTimeout(timer);
+  cancelAnimationFrame(raf);
+  // 0: 이번 화면을 그리기 전에 바로 (글을 쓰는 중: 줄이 쪽 끝을 넘을 때 잘못된 자리에 잠깐 보였다가 튀지 않게)
+  // 아주 긴 장이라 재는 데 오래 걸리면 입력이 끊기지 않게 조금 모아서 잰다
+  if (!delay && lastCost > 30) delay = 120;
+  if (!delay) { raf = requestAnimationFrame(relayout); return; }
   timer = setTimeout(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(relayout); }, delay);
 }
 
@@ -143,11 +195,15 @@ function lineStartPos(view, nodes, range, lineTop) {
 }
 
 function relayout() {
+  const t0 = performance.now();
+  try { relayoutInner(); } finally { lastCost = performance.now() - t0; }
+}
+function relayoutInner() {
   if (!geo || !app.editor) return;
   const view = app.editor.view;
   const dom = view.dom;
   // 한글 입력(조합) 중에는 건드리지 않는다
-  if (view.composing) { schedule(400); return; }
+  if (view.composing) { schedule(300); return; } // 조합이 끝나면(compositionend) 바로 다시 잰다
   // 끼워 둔 빈 칸을 모두 걷어 낸 상태에서 잰다 (글꼴·내용이 바뀌면 줄 시작 위치가 달라지므로)
   if (key.getState(view.state).find().length) view.dispatch(view.state.tr.setMeta(key, []).setMeta('addToHistory', false));
   const base = dom.getBoundingClientRect().top;
@@ -246,7 +302,8 @@ export function setZoom(v) {
 }
 
 export function bindPageView() {
-  app.editor.on('update', () => schedule());
+  app.editor.on('update', () => schedule(0));
+  app.editor.view.dom.addEventListener('compositionend', () => setTimeout(() => schedule(0), 0));
   addEventListener('resize', () => { if (isPageView()) applyPageView(); });
   document.fonts?.addEventListener?.('loadingdone', () => schedule(50));
   document.fonts?.ready.then(() => schedule(50));
