@@ -5,7 +5,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { app, saveSettings } from './app.js';
 import { layoutOf, bodyBox, mm2px, pt2px, textCss, numSide } from './layout.js';
-import { $ } from './ui.js';
+import { $, symRails } from './ui.js';
 
 const GAP = 24; // 쪽 사이 간격 (px)
 const key = new PluginKey('pageBreaks');
@@ -71,8 +71,8 @@ function railReserve(w) {
   const proof = app.settings.proof !== false && app.settings.proofRail !== false;
   const anno = document.body.classList.contains('has-anno-rail');
   if (!proof && !anno) return 0;
-  if (w >= 1120) return 536;
-  return w >= 860 ? 268 : 0;
+  // 쪽 보기에서는 종이를 가운데 두려고 여백이 생길 수 있으면 늘 양쪽에 같은 폭을 비워 둔다 (ui.js symRails)
+  return w >= 860 ? 536 : 0;
 }
 
 let geo = null; // 지금 쪽 크기 (px)
@@ -83,6 +83,7 @@ export function applyPageView() {
   const on = isPageView() && !!app.project && !document.body.classList.contains('revising');
   paper.classList.toggle('pv', on);
   document.body.classList.toggle('pageview', on);
+  symRails();
   $('#pvZoom') && ($('#pvZoom').hidden = !on);
   if (!on) {
     geo = null; last = '';

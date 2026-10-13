@@ -148,7 +148,8 @@ export function ago(t) {
 export function symRails() {
   const b = document.body, sc = document.getElementById('paperScroll');
   const any = b.classList.contains('has-anno-rail') || b.classList.contains('has-proof-rail');
-  const on = !!(any && sc && sc.clientWidth >= 1120);
+  // 넓으면 양쪽 대칭. 쪽 보기에서는 종이가 한쪽으로 치우쳐 보이지 않게 조금 좁아도 대칭으로 둔다 (pageview.js railReserve와 같은 기준)
+  const on = !!(any && sc && (sc.clientWidth >= 1120 || (b.classList.contains('pageview') && sc.clientWidth >= 860)));
   const was = b.classList.contains('rail-sym');
   b.classList.toggle('rail-sym', on);
   return was !== on;
