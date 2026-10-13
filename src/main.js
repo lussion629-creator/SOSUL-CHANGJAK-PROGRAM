@@ -11,7 +11,7 @@ import { openRevision, closeRevision, isRevisionOpen, bindRevision, revisionOnCh
 import * as F from './features.js';
 import { showStats, showToday, showClips } from './stats-view.js';
 import { loadTemplates } from './layout.js';
-import { bindPageView, togglePageView, applyPageView, setZoom } from './pageview.js';
+import { bindPageView, togglePageView, applyPageView, setZoom, setNumAll } from './pageview.js';
 import { showPageSetup } from './pagesetup.js';
 import { toggleBook, bindBook, isBookOpen } from './bookview.js';
 import { bindSafety, showRecovery, restoreFromTrash } from './safety.js';
@@ -222,6 +222,8 @@ function bind() {
   $('#btnSidebar').addEventListener('click', () => toggleSidebar());
   $('#pvZoomSel').value = app.settings.pvZoom || 'fit';
   $('#pvZoomSel').addEventListener('change', (e) => setZoom(e.target.value));
+  $('#pvNumSel').value = app.settings.pvNumAll ? 'all' : 'ch';
+  $('#pvNumSel').addEventListener('change', (e) => setNumAll(e.target.value === 'all'));
 
   // 찾기
   $('#findInput').addEventListener('input', () => F.runFind(0));

@@ -88,7 +88,7 @@ export function applyPageView() {
     geo = null; last = '';
     $('#sheets')?.remove();
     paper.style.cssText = '';
-    $('#pvFloats')?.remove(); floatSig = '';
+    $('#pvFloats')?.remove();
     return;
   }
   const L = layoutOf();
@@ -138,69 +138,135 @@ export function schedule(delay = 250) {
 
 // 띄움 기둥: [폭 0, 본문 높이] [폭 100%, 쪽 사이 높이] 를 번갈아 오른쪽에 쌓는다 (clear로 하나씩 아래로).
 // 줄 상자가 '쪽 사이' 띄움에 조금이라도 걸리면 브라우저가 그 줄을 띄움 아래(다음 쪽 첫 줄 자리)로 옮긴다.
-let floatSig = '';
-function setFloats(view, n) {
-  const dom = view.dom;
-  let host = $('#pvFloats');
-  if (!host || host.nextElementSibling !== dom) {
-    host?.remove();
-    host = document.createElement('div');
-    host.id = 'pvFloats';
-    host.setAttribute('aria-hidden', 'true');
-    dom.before(host);
-    floatSig = '';
-  }
+function setFloats(host, dom, n) {
   const { pitch, bodyH, half } = geo;
   // 줄 상자 아래 끝이 이 선을 넘으면 = 글자 아래 끝이 본문 칸을 넘으면 (줄 위아래 반쪽 여백 half)
   const unit = bodyH + 2 * half;
   const lead = dom.getBoundingClientRect().top - host.getBoundingClientRect().top;
   const sig = [n, unit, pitch, lead].join();
-  if (sig === floatSig) return;
-  floatSig = sig;
+  if (sig === host.dataset.sig) return;
+  host.dataset.sig = sig;
   let html = '';
   for (let k = 0; k < n; k++) {
     html += `<div class="spf" style="height:${k ? unit : unit + lead}px"></div><div class="gapf" style="height:${pitch - unit}px"></div>`;
   }
   host.innerHTML = html;
 }
-
-function relayout() {
-  if (!geo || !app.editor) return;
-  const view = app.editor.view;
-  const dom = view.dom;
-  // 쪽 수: 원고 끝이 몇째 쪽에 닿는가. 쪽이 늘면 띄움을 하나 더 세우고 다시 잰다
-  let n = Math.max(0, $('#pvFloats .gapf') ? $('#pvFloats').children.length / 2 : 0);
+// 원고(dom) 앞 띄움 기둥(host)을 맞추며 쪽 수를 잰다. 쪽이 늘면 띄움을 하나 더 세우고 다시 잰다
+function countPages(host, dom) {
+  let n = host.children.length / 2;
   let pages = 1;
-  for (let i = 0; i < 4; i++) {
-    setFloats(view, n);
+  for (let i = 0; i < 6; i++) {
+    setFloats(host, dom, n);
     const base = dom.getBoundingClientRect().top;
     const lastEl = dom.lastElementChild;
     const bottom = lastEl ? lastEl.getBoundingClientRect().bottom - base : 0;
-    pages = Math.max(1, Math.floor(Math.max(0, bottom - 1) / geo.pitch) + 1);
+    // 마지막 줄이 몇째 쪽 본문 칸 안에 드는가 (쪽 아래 여백까지 넘어갔으면 그다음 쪽: 띄움을 하나 더 세우면 그리로 옮겨진다)
+    const unit = geo.bodyH + 2 * geo.half;
+    pages = bottom <= unit + 0.5 ? 1 : Math.ceil((bottom - unit - 0.5) / geo.pitch) + 1;
     if (pages - 1 === n) break;
     n = pages - 1;
   }
-  drawSheets(pages);
+  return pages;
+}
+
+function relayout() {
+  if (!geo || !app.editor) return;
+  const dom = app.editor.view.dom;
+  let host = $('#pvFloats');
+  if (!host || host.nextElementSibling !== dom) {
+    host?.remove();
+    host = document.createElement('div');
+    host.id = 'pvFloats';
+    host.className = 'pv-floats';
+    host.setAttribute('aria-hidden', 'true');
+    dom.before(host);
+  }
+  drawSheets(countPages(host, dom));
+  if (numAll()) scheduleOthers();
+}
+
+// ---------- 쪽 번호를 작품 전체로 이어 매기기 ----------
+// 다른 장의 쪽 수는 화면 밖 같은 크기 종이에 그 장을 놓고 같은 방식으로 잰다 (장 내용·쪽 설정이 바뀔 때만 다시)
+export const numAll = () => !!app.settings.pvNumAll;
+const pageCache = new Map(); // 장 id → { sig, n }
+let others = { before: 0, after: 0 }; // 지금 장 앞·뒤 장들의 쪽 수
+let othersTimer;
+function scheduleOthers() { clearTimeout(othersTimer); othersTimer = setTimeout(measureOthers, 400); }
+function pagesOf(c) {
+  const sig = [geo.W, geo.H, JSON.stringify(geo.L), c.updated, c.html.length].join('|');
+  const hit = pageCache.get(c.id);
+  if (hit && hit.sig === sig) return hit.n;
+  let box = document.getElementById('pvMeasure');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'pvMeasure';
+    box.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(box);
+  }
+  box.className = 'paper pv';
+  box.style.cssText = $('#paper').style.cssText + ';position:absolute;left:-100000px;top:0;visibility:hidden;pointer-events:none;contain:layout style';
+  box.innerHTML = '<div class="pv-floats"></div><div class="ProseMirror"></div>';
+  box.lastChild.innerHTML = c.html || '<p></p>';
+  const n = countPages(box.firstChild, box.lastChild);
+  box.innerHTML = '';
+  pageCache.set(c.id, { sig, n });
+  return n;
+}
+function measureOthers() {
+  if (!geo || !numAll() || !app.project) return;
+  const order = app.project.order || [];
+  const at = order.indexOf(app.cur);
+  let before = 0, after = 0;
+  order.forEach((id, i) => {
+    if (id === app.cur) return;
+    const c = app.chapters.get(id);
+    if (!c) return;
+    const n = pagesOf(c);
+    if (i < at) before += n; else after += n;
+  });
+  if (before !== others.before || after !== others.after) { others = { before, after }; drawn = ''; drawSheets(curPages); }
+  else paintStat();
 }
 
 let drawn = '';
+let curPages = 1;
 function drawSheets(n) {
   const host = $('#sheets');
   if (!host) return;
+  curPages = n;
   const L = geo.L;
-  const sig = [n, geo.W, geo.H, L.num, L.numStart, L.size].join();
+  const off = numAll() ? others.before : 0;
+  const sig = [n, geo.W, geo.H, L.num, L.numStart, L.size, off].join();
   $('#paper').style.setProperty('--pv-total', n * geo.pitch - GAP + 'px');
   if (sig === drawn && host.children.length === n) return;
   drawn = sig;
   let html = '';
   for (let k = 0; k < n; k++) {
-    const no = k + (+L.numStart || 1);
+    const no = k + (+L.numStart || 1) + off;
     const side = numSide(L, no);
     html += `<div class="sheet" style="top:${k * geo.pitch}px">${side ? `<span class="pno ${side}">${no}</span>` : ''}</div>`;
   }
   host.innerHTML = html;
+  paintStat();
+}
+function paintStat() {
   const st = $('#pvStat');
-  if (st) st.textContent = `${n}쪽`;
+  if (!st || !geo) return;
+  const n = curPages;
+  if (!numAll()) { st.textContent = `${n}쪽`; st.title = '이 장의 쪽 수'; return; }
+  const a = (+geo.L.numStart || 1) + others.before;
+  st.textContent = `${a}–${a + n - 1}쪽 / 전체 ${others.before + n + others.after}쪽`;
+  st.title = '이 장의 쪽 번호 / 작품 전체 쪽 수';
+}
+export function setNumAll(on) {
+  app.settings.pvNumAll = !!on;
+  saveSettings();
+  others = { before: 0, after: 0 };
+  drawn = '';
+  if (geo) { drawSheets(curPages); if (on) measureOthers(); }
+  const sel = $('#pvNumSel');
+  if (sel) sel.value = on ? 'all' : 'ch';
 }
 
 export function togglePageView(on = !isPageView()) {

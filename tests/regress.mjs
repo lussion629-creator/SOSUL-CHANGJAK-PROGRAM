@@ -564,6 +564,39 @@ await test('쪽 보기(폭 맞춤): 교정 여백이 생겼다 없어져도 쪽 
   await ctx.close();
 });
 
+await test('쪽 보기: 쪽 번호를 작품 전체로 이어 매기면 앞 장들의 쪽 수만큼 이어지고, 장 끝 줄도 쪽 아래 여백에 놓이지 않는다', async () => {
+  const { ctx, page } = await boot({ pageView: true });
+  const para = '<p>' + PARA.repeat(30) + '</p>';
+  const ids = (await mkProject(page, [{ title: '1장', html: para }, { title: '2장', html: para + para }, { title: '3장', html: '<p>짧은 장</p>' }])).order;
+  const real = [];
+  for (const id of ids) {
+    await run(page, 'await A.openChapter(arg);', id);
+    await page.waitForTimeout(700);
+    real.push(await page.$$eval('#sheets .sheet', (e) => e.length));
+    // 마지막 줄 아래 끝이 그 쪽 본문 칸(띄움 기둥의 본문 높이) 안에 있어야 한다
+    const over = await page.evaluate(() => {
+      const d = document.querySelector('#editorHost .ProseMirror'); const b = d.getBoundingClientRect().top;
+      const bottom = d.lastElementChild.getBoundingClientRect().bottom - b;
+      const f = [...document.querySelectorAll('#pvFloats .gapf')].map((g) => [g.getBoundingClientRect().top - b, g.getBoundingClientRect().bottom - b]);
+      return f.some(([t, u]) => bottom > t + 1 && bottom < u) || (f.length && bottom > f[f.length - 1][1] + (f[0][0]) + 1);
+    });
+    assert(!over, '장 끝 줄이 쪽 아래 여백에 있음');
+  }
+  await page.selectOption('#pvNumSel', 'all');
+  await page.waitForTimeout(900);
+  const nos = await page.$$eval('#sheets .pno', (e) => e.map((x) => +x.textContent));
+  assert(nos[0] === real[0] + real[1] + 1, `3장 첫 쪽 번호 ${nos[0]} (앞 장 ${real})`);
+  assert((await page.textContent('#pvStat')).includes(`전체 ${real[0] + real[1] + real[2]}쪽`), await page.textContent('#pvStat'));
+  await run(page, 'await A.openChapter(arg);', ids[1]);
+  await page.waitForTimeout(900);
+  const nos2 = await page.$$eval('#sheets .pno', (e) => e.map((x) => +x.textContent));
+  assert(nos2[0] === real[0] + 1 && nos2.length === real[1], `2장 쪽 번호 ${nos2}`);
+  await page.selectOption('#pvNumSel', 'ch');
+  await page.waitForTimeout(300);
+  assert((await page.$$eval('#sheets .pno', (e) => +e[0].textContent)) === 1, '장마다로 돌리면 1부터');
+  await ctx.close();
+});
+
 // ---------------- 유의어 창 ----------------
 await test('유의어 창: 구절 통째로 바꾸기는 고른 구절을 새로 쓴 표현으로 바꾸고, 서식을 지킨다 (AI는 흉내)', async () => {
   const { ctx, page } = await boot({ synProvider: 'openai', ai: { provider: 'openai', models: { openai: 'gpt-test-mini' } } });

@@ -395,9 +395,9 @@ details summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
 .paper.pv .ProseMirror h1, .paper.pv .ProseMirror h2, .paper.pv .ProseMirror h3 { line-height: var(--pv-line); }
 .paper.pv .ProseMirror p.is-editor-empty:first-child::before { text-indent: var(--pv-indent); }
 /* 쪽 나누기 띄움 기둥 (pageview.js): 원고 앞에 두고, 줄이 쪽 사이 자리를 비켜 가게 한다 */
-#pvFloats { height: 0; pointer-events: none; user-select: none; }
-#pvFloats > div { float: right; clear: right; width: 0; }
-#pvFloats > .gapf { width: 100%; }
+#pvFloats, .pv-floats { height: 0; pointer-events: none; user-select: none; }
+#pvFloats > div, .pv-floats > div { float: right; clear: right; width: 0; }
+#pvFloats > .gapf, .pv-floats > .gapf { width: 100%; }
 /* 줄이 아닌 덩어리(구분선·표 등)도 띄움을 비켜 가게 */
 .paper.pv .ProseMirror > :not(p):not(h1):not(h2):not(h3):not(h4):not(blockquote):not(ul):not(ol) { display: flow-root; }
 body.pageview .paper-scroll { padding: 16px 16px 48px; overflow-x: auto; }
