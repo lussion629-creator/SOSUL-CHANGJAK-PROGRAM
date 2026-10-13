@@ -195,42 +195,123 @@ export function setSaveState(kind, text) {
 }
 
 // ---------- 저장 ----------
+// 원고 본문(장)과 작품 정보는 반드시 기기에 써야 하는 것, 버전 기록·일일 통계는 덧붙는 기록으로 나눈다.
+// 본문을 쓰지 못한 장은 app.unsaved에 남겨 두고(메모리의 ch.html이 최신본) 다시 쓸 때까지 계속 시도한다.
+// saveNow()는 본문이 모두 기기에 저장되면 true, 아니면 false를 돌려준다.
 let saving = null;
+let retryTimer = null;
+app.unsaved = new Set(); // 기기에 아직 못 쓴 장 id
+app.projUnsaved = false; // 작품 정보(장 순서 등)를 못 씀
+app.saveError = null;
+export const hasUnsaved = () => app.dirty || app.unsaved.size > 0 || app.projUnsaved;
+// 장 전환 등으로 상태 표시를 새로 칠할 때: 못 쓴 것이 남아 있으면 '저장됨'으로 덮지 않는다
+export function refreshSaveState() {
+  if (app.unsaved.size || app.projUnsaved) setSaveState('err', '저장 실패 · 다시 시도 중');
+  else if (app.dirty) setSaveState('dirty', '입력 중…');
+  else setSaveState('ok', '저장됨');
+}
 export async function saveNow({ snapshot = true, track = true } = {}) {
   clearTimeout(app.saveTimer);
-  if (saving) await saving;
-  if (!app.dirty || !app.cur) return;
+  while (saving) await saving;
+  if (!hasUnsaved() || !app.project) return true;
+  let ok = true;
   saving = (async () => {
-    const ch = app.chapters.get(app.cur);
-    const newParas = docParagraphs(app.editor.state.doc).map((p) => p.text);
-    let amounts = null;
-    const oldParas = ch._paras ?? htmlParagraphs(ch.html);
-    if (track) {
-      try { amounts = editAmounts(oldParas, newParas); } catch { /* 계산 실패는 기록만 건너뜀 */ }
+    const proj = app.project;
+    let cur = null, amounts = null, oldParas = null, newParas = null;
+    if (app.dirty && app.cur) {
+      cur = app.chapters.get(app.cur);
+      newParas = docParagraphs(app.editor.state.doc).map((p) => p.text);
+      oldParas = cur._paras ?? htmlParagraphs(cur.html);
+      if (track) {
+        try { amounts = editAmounts(oldParas, newParas); } catch { /* 계산 실패는 기록만 건너뜀 */ }
+      }
+      // 이 시점의 원고를 찍어 둔다. 쓰는 동안 더 입력하면 onEdit가 dirty를 다시 켠다.
+      cur._paras = newParas;
+      cur.html = app.editor.getHTML();
+      cur.updated = Date.now();
+      app.dirty = false;
+      app.unsaved.add(cur.id);
     }
-    ch._paras = newParas;
-    ch.html = app.editor.getHTML();
-    ch.updated = Date.now();
-    app.dirty = false;
-    try {
-      await S.putChapter(ch);
-      app.project.updated = Date.now();
-      app.project.lastChapter = ch.id;
-      await S.putProject(app.project);
-      if (snapshot) await maybeSnapshot(ch);
-      await updateDaily(amounts, ch.id, oldParas, newParas);
-      setSaveState('ok', `저장됨 ${hms(Date.now())}`);
-      renderBinderCounts();
-      app.hooks.afterSave.forEach((f) => f());
-      scheduleSync();
-    } catch (e) {
-      app.dirty = true;
-      setSaveState('err', '저장 실패');
-      toast('저장하지 못했습니다: ' + e.message);
+    // 1) 본문: 못 쓴 장을 모두 쓴다
+    for (const id of [...app.unsaved]) {
+      const c = app.chapters.get(id);
+      if (!c || c.projectId !== proj.id) { app.unsaved.delete(id); continue; }
+      try { await S.putChapter(c); app.unsaved.delete(id); (app.syncPendingIds ??= new Set()).add(id); } catch (e) { ok = false; app.saveError = e; }
     }
+    if (cur && app.unsaved.has(cur.id)) cur._paras = oldParas; // 다음 시도에서 쓴 양을 다시 센다
+    // 2) 작품 정보 (장 순서·마지막 장)
+    if (ok) {
+      try {
+        proj.updated = Date.now();
+        if (cur) proj.lastChapter = cur.id;
+        await S.putProject(proj);
+        app.projUnsaved = false;
+      } catch (e) { ok = false; app.projUnsaved = true; app.saveError = e; }
+    }
+    if (!ok) {
+      setSaveState('err', '저장 실패 · 다시 시도 중');
+      if (!retryTimer) toast('원고를 이 기기에 저장하지 못했습니다: ' + (app.saveError?.message || app.saveError) + ' — 저장 공간을 확인해 주세요. 계속 다시 시도합니다.', 8000);
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { retryTimer = null; saveNow(); }, 15e3);
+      return;
+    }
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; toast('밀려 있던 원고를 저장했어요.'); }
+    app.saveError = null;
+    // 3) 덧붙는 기록: 실패해도 본문은 저장된 것이므로 따로 알린다
+    let extraFail = null;
+    if (cur) {
+      try { if (snapshot) await maybeSnapshot(cur); } catch (e) { extraFail = e; }
+      try { await updateDaily(amounts, cur.id, oldParas, newParas); } catch (e) { extraFail = e; }
+    }
+    if (app.dirty) setSaveState('dirty', '입력 중…');
+    else if (extraFail) { setSaveState('warn', `저장됨 ${hms(Date.now())} · 기록 일부 실패`); console.warn(extraFail); }
+    else setSaveState('ok', `저장됨 ${hms(Date.now())}`);
+    if (app.project === proj) renderBinderCounts();
+    app.hooks.afterSave.forEach((f) => f());
+    scheduleSync();
   })();
-  await saving;
-  saving = null;
+  try { await saving; } finally { saving = null; }
+  return ok && !app.unsaved.size && !app.projUnsaved;
+}
+
+// 저장에 실패한 채 장·작품을 바꾸거나 닫으려 할 때: 다시 시도 / 복구 파일 / 그대로 진행 / 취소
+// lose: 진행하면 저장 못 한 글이 사라지는 경우(작품 바꾸기·닫기·가져오기). 장 바꾸기는 메모리에 남아 계속 다시 시도한다.
+export async function ensureSaved(what = '계속하기', { lose = true } = {}) {
+  for (;;) {
+    if (await saveNow()) return true;
+    const names = [...app.unsaved].map((id) => app.chapters.get(id)?.title).filter(Boolean);
+    const r = await dialog({
+      title: '원고를 저장하지 못했어요',
+      body: `<p>이 기기에 원고를 쓰지 못했습니다${app.saveError ? ` (${h(app.saveError.message || app.saveError)})` : ''}.${names.length ? ` 저장되지 않은 장: <b>${names.map(h).join(', ')}</b>` : ''}</p>
+        <p>${lose ? `이대로 ${h(what)}하면 <b>저장되지 않은 글을 잃습니다.</b>` : `${h(what)}해도 저장되지 않은 글은 앱을 켜 둔 동안 남아 있고 계속 다시 저장을 시도합니다. 앱을 끄면 사라집니다.`}</p>
+        <p class="hint">디스크 공간을 비운 뒤 ‘다시 시도’를 누르거나, 먼저 ‘복구 파일 받기’로 지금 원고를 파일로 받아 두세요.</p>`,
+      buttons: [{ label: '취소', value: 'close' }, { label: lose ? '저장하지 않고 진행' : `그대로 ${what}`, value: 'go' }, { label: '복구 파일 받기', value: 'rescue' }, { label: '다시 시도', value: 'retry', primary: true }],
+    });
+    if (r.value === 'retry') continue;
+    if (r.value === 'rescue') { await rescueFile(); continue; }
+    if (r.value === 'go') {
+      if (lose) { app.unsaved.clear(); app.projUnsaved = false; app.dirty = false; clearTimeout(retryTimer); retryTimer = null; }
+      return true;
+    }
+    return false;
+  }
+}
+
+// 메모리에 있는 지금 원고 전체를 백업 파일(.novel.json)로 내려받는다. 기기 저장소를 거치지 않는다.
+export async function rescueFile() {
+  if (!app.project) return;
+  if (app.dirty && app.cur) { const c = app.chapters.get(app.cur); c.html = app.editor.getHTML(); }
+  const strip = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !k.startsWith('_')));
+  // 자료·버전 기록은 기기에서 읽을 수 있으면 함께 담고, 장 본문은 메모리의 최신본으로 바꿔 넣는다
+  let base = null;
+  try { base = S.packBundle(await S.exportBundle(app.project.id)); } catch { /* 읽기도 안 되면 장만 */ }
+  const b = { format: 'novel-writer', version: 2, notes: [], snapshots: [], daily: [], ...(base || {}), exported: Date.now(), rescue: true, project: strip(app.project), chapters: [...app.chapters.values()].map(strip) };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(b)], { type: 'application/json' }));
+  a.download = `${app.project.title} 복구 ${S.today()}.novel.json`;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60e3);
+  toast('지금 원고를 복구 파일로 받았어요. 파일 → 열기로 다시 불러올 수 있어요.', 6000);
 }
 
 async function maybeSnapshot(ch, force = false) {
@@ -339,14 +420,16 @@ export function netToday(r = app.todayRec) {
 
 // ---------- 작품 열기 ----------
 // 백업을 들여오기 직전: 쓰던 글을 저장하고, 들여온 뒤 옛 화면 내용이 덮어쓰지 않게 한다
+// 저장에 실패해 사용자가 취소하면 false (가져오기를 멈춘다)
 export async function beforeImport() {
-  await saveNow();
+  if (!(await ensureSaved('가져오기'))) return false;
   clearTimeout(app.saveTimer);
   app.dirty = false;
+  return true;
 }
 
 export async function openProject(id) {
-  await saveNow();
+  if (!(await ensureSaved('다른 작품 열기'))) return false;
   let p = await S.getProject(id);
   if (!p) return false;
   app.project = p;
@@ -380,8 +463,8 @@ export async function openProject(id) {
 }
 
 export async function openChapter(id) {
-  if (app.cur === id) return;
-  await saveNow();
+  if (app.cur === id) return true;
+  if (!(await ensureSaved('장 옮기기', { lose: false }))) return false;
   if (app.cur) app.states.set(app.cur, app.editor.state);
   const ch = app.chapters.get(id);
   app.cur = id;
@@ -400,13 +483,14 @@ export async function openChapter(id) {
   // 처음 여는 장이면 지금 상태를 출발점으로 남긴다
   if (!snaps.length && ch.html && ch.html !== '<p></p>') app.lastSnap.set(id, await S.addSnapshot(ch, 'auto', '처음 연 상태'));
   app.project.lastChapter = id;
-  S.putProject(app.project);
-  setSaveState('ok', '저장됨');
+  S.putProject(app.project).then(() => { app.projUnsaved = false; }, () => { app.projUnsaved = true; refreshSaveState(); });
+  refreshSaveState();
   renderBinder();
   updateCounts();
   if (isTabOpen('history')) renderHistory();
   app.hooks.afterOpen.forEach((f) => f());
   closeSidebarMobile();
+  return true;
 }
 
 export function currentCount() {
@@ -763,7 +847,7 @@ export async function snapshotMenu(id) {
 export async function restoreSnapshot(s) {
   if (s.chapterId !== app.cur && app.chapters.has(s.chapterId)) await openChapter(s.chapterId);
   if (!(await confirmDlg('이 버전으로 되돌리기', `지금 원고를 ${dayLabel(s.time)} ${hm(s.time)} 버전으로 바꿉니다. 지금 상태는 “되돌리기 전” 버전으로 기록에 남으니 언제든 다시 돌아올 수 있어요.`, '되돌리기'))) return false;
-  await saveNow({ snapshot: false });
+  if (!(await saveNow({ snapshot: false }))) { toast('지금 원고를 저장하지 못해 되돌리지 않았어요. 저장 공간을 확인해 주세요.', 6000); return false; }
   const ch = app.chapters.get(app.cur);
   ch.html = app.editor.getHTML();
   await S.addSnapshot(ch, 'manual', '되돌리기 전');
@@ -845,71 +929,100 @@ export function setSyncState(kind, text) {
 }
 
 // 올릴 묶음: 버전 기록은 앞 버전과 달라진 문단만 담는다 (packBundle)
-export async function bundleForSync() {
-  return S.packBundle(await S.exportBundle(app.project.id));
+export async function bundleForSync(pid = app.project.id) {
+  return S.packBundle(await S.exportBundle(pid));
 }
 
-// 다른 기기에서 올린 것을 받아 와 이 기기 작품에 덮는다 (이 기기에서 쓰던 원고는 버전 기록에 남는다)
-async function pullRemote(B, key, remote) {
-  const b = await B.pullBundle(remote.id, S.readBundleBytes);
-  // 받는 동안 쓴 글까지 저장하고(가져오기 전에 버전으로 남는다) 그동안은 입력을 잠시 막는다
-  app.editor.setEditable(false);
-  try {
-    await saveNow();
-    clearTimeout(app.saveTimer); app.dirty = false;
-    await S.importBundle(b);
-  } finally { app.editor.setEditable(true); }
-  const p = await S.getProject(app.project.id);
-  p[key] = remote.modifiedTime;
+// 동기화는 시작할 때 정한 작품(pid)에 대해서만 일한다. 기다리는 사이 다른 작품을 열어도
+// 받은 결과·완료 표시는 그 작품(pid)에만 적고, 지금 열린 작품의 상태를 덮지 않는다.
+const isOpen = (pid) => app.project?.id === pid;
+// 작품 정보 고치기: 열려 있는 작품이면 메모리 객체를 고쳐 저장(다음 저장이 옛 값으로 덮지 않게), 아니면 기기의 것을
+async function patchProject(pid, fn) {
+  if (isOpen(pid)) { fn(app.project); await S.putProject(app.project); return app.project; }
+  const p = await S.getProject(pid);
+  if (!p) return null;
+  fn(p);
   await S.putProject(p);
-  app.cur = null;
-  await openProject(p.id);
-  toast('다른 기기에서 고친 내용을 가져왔어요. 이 기기에서 쓰던 내용은 버전 기록에 남아 있습니다.', 6000);
+  return p;
 }
 
-let syncing = false;
+// 다른 기기에서 올린 것을 받아 와 이 기기 작품에 맞춘다 (이 기기에서 쓰던 원고는 버전 기록에 남는다)
+async function pullRemote(B, key, remote, pid) {
+  const b = await B.pullBundle(remote.id, S.readBundleBytes);
+  if (b?.project?.id !== pid) throw new Error('받은 파일이 다른 작품입니다.');
+  const since = (await S.getProject(pid))?.syncLocal?.[key] || 0;
+  const open = isOpen(pid);
+  // 열린 작품이면: 받는 동안 쓴 글까지 저장하고(바뀌는 장은 버전으로 남는다) 그동안은 입력을 잠시 막는다
+  if (open) app.editor.setEditable(false);
+  try {
+    if (open && !(await saveNow())) throw new Error('이 기기에 원고를 저장하지 못해 받아 오기를 멈췄어요.');
+    // 이 기기에서 아직 올리지 않은 장은 다른 기기가 지웠더라도 남긴다
+    const keepLocal = {};
+    if (app.syncPendingIds) for (const id of app.syncPendingIds) keepLocal[id] = true;
+    await S.importBundle(b, { mode: 'merge', since, keepLocal });
+  } finally { if (open) app.editor.setEditable(true); }
+  await patchProject(pid, (p) => { p[key] = remote.modifiedTime; });
+  if (isOpen(pid)) {
+    // 받은 작품 정보로 다시 연다 (저장할 것은 위에서 다 저장함)
+    clearTimeout(app.saveTimer); app.dirty = false;
+    app.cur = null; app.project = null;
+    await openProject(pid);
+    toast('다른 기기에서 고친 내용을 가져왔어요. 이 기기에서 쓰던 내용은 버전 기록에 남아 있습니다.', 6000);
+  }
+}
+
+let syncing = null; // 지금 동기화 중인 작품 id
 export async function syncNow({ quiet = false } = {}) {
   if (syncing || !app.project || isOffline()) return;
-  syncing = true;
+  const pid = app.project.id; // 이 작업의 작품: 끝날 때까지 바뀌지 않는다
+  syncing = pid;
   const B = syncBackend();
   const key = syncKey();
   const server = B === SV;
+  const pill = (kind, text) => { if (isOpen(pid)) setSyncState(kind, text); };
   try {
-    await saveNow();
-    setSyncState('', '☁ 동기화 중…');
+    if (!(await saveNow())) throw new Error('이 기기에 원고를 저장하지 못해 동기화를 미뤘어요.');
+    pill('', '☁ 동기화 중…');
     for (let round = 0; ; round++) {
       // 다른 기기에서 더 새로 올렸으면 먼저 받아 온다
-      const remote = await B.remoteInfo(app.project.id);
-      const mine = app.project[key];
+      const remote = await B.remoteInfo(pid);
+      const meta = await S.getProject(pid);
+      if (!meta) return; // 기다리는 사이 작품을 지움
+      const mine = meta[key];
       const newer = remote && (server
         ? remote.modifiedTime !== mine // 서버 시각은 서버가 정하니 다르면 다른 기기가 올린 것
         : mine && Date.parse(remote.modifiedTime) > Date.parse(mine) + 1000);
-      if (newer) await pullRemote(B, key, remote);
-      app.syncPending = false;
-      const b = await bundleForSync();
+      if (newer) await pullRemote(B, key, remote, pid);
+      if (isOpen(pid) && !(await saveNow())) throw new Error('이 기기에 원고를 저장하지 못해 동기화를 미뤘어요.');
+      if (isOpen(pid)) app.syncPending = false;
+      const startedAt = Date.now();
+      const b = await bundleForSync(pid);
+      const base = (await S.getProject(pid))?.[key] || '';
       let r;
       try {
-        r = await B.pushBundle(b, await S.gzip(JSON.stringify(b)), { baseTime: app.project[key] || '' });
+        r = await B.pushBundle(b, await S.gzip(JSON.stringify(b)), { baseTime: base });
       } catch (e) {
         // 받아 오는 사이 또 다른 기기가 올렸다: 한 번 더 받아서 맞춘다
         if (e.conflict && round < 2) continue;
         throw e;
       }
       pushedAt = Date.now();
-      app.project[key] = r.modifiedTime;
-      if (!server) { app.project.syncedSize = +r.size || 0; app.project.driveFileId = r.id; }
-      else app.project.srvSyncedSize = +r.size || 0;
-      await S.putProject(app.project);
+      await patchProject(pid, (p) => {
+        p[key] = r.modifiedTime;
+        p.syncLocal = { ...(p.syncLocal || {}), [key]: startedAt };
+        if (!server) { p.syncedSize = +r.size || 0; p.driveFileId = r.id; } else p.srvSyncedSize = +r.size || 0;
+      });
+      if (isOpen(pid)) app.syncPendingIds = null;
       break;
     }
-    setSyncState('ok', `☁ ${hm(Date.now())} 동기화`);
-    if (!quiet) toast(server ? '동기화 서버에 저장했어요.' : '구글 드라이브에 저장했어요.');
+    pill('ok', `☁ ${hm(Date.now())} 동기화`);
+    if (!quiet && isOpen(pid)) toast(server ? '동기화 서버에 저장했어요.' : '구글 드라이브에 저장했어요.');
   } catch (e) {
-    app.syncPending = true;
-    setSyncState('err', '☁ 동기화 안 됨');
+    if (isOpen(pid)) app.syncPending = true;
+    pill('err', '☁ 동기화 안 됨');
     if (!quiet) toast(e.message, 6000);
     console.warn(e);
-  } finally { syncing = false; }
+  } finally { syncing = null; }
 }
 
 export function refreshSyncPill() {

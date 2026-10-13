@@ -3,7 +3,7 @@ import * as S from './store.js';
 import * as G from './gdrive.js';
 import * as SV from './syncserver.js';
 import {
-  app, loadSettings, initEditor, openProject, openChapter, saveNow, addChapter, chapterMenu, bindBinderDrag,
+  app, loadSettings, initEditor, openProject, openChapter, saveNow, ensureSaved, hasUnsaved, addChapter, chapterMenu, bindBinderDrag,
   renderHistory, summarizePeriod, snapshotMenu, manualSnapshot, toggleTheme, toggleSidebar, isTabOpen, refreshSyncPill, scheduleSync, syncNow, flushSync, syncBackend, renderBinder,
 } from './app.js';
 import { runCommand, setSearch } from './editor.js';
@@ -106,7 +106,17 @@ async function boot() {
   if (window.desktop?.checkUpdate) { $('#mUpdate').hidden = false; window.desktop.version().then((v) => { if (v) $('#mVersion').textContent = `지금 ${v}`; }); }
   window.desktop?.onOpenFile(({ name, data }) => F.openFromFile(new File([data], name)));
   window.launchQueue?.setConsumer(async (p) => { for (const h of p.files || []) F.openFromFile(await h.getFile()); });
-  window.__saveBeforeClose = async () => { await saveNow(); await flushSync(); };
+  // 데스크톱 앱이 닫기·업데이트 전에 부른다. 기기에 저장했는지(true/false)를 돌려준다.
+  // 원격 동기화는 기다리되 오래 걸려도 로컬 저장 결과와 섞지 않는다.
+  window.__saveBeforeClose = async () => {
+    const ok = await saveNow();
+    if (ok) await Promise.race([Promise.resolve(flushSync()).catch(() => {}), new Promise((r) => setTimeout(r, 6000))]);
+    return ok;
+  };
+  // 저장에 실패해 닫기·업데이트가 멈췄을 때: 다시 시도 / 복구 파일 / 그래도 진행
+  window.__closeBlocked = async (what) => {
+    if (await ensureSaved(what === 'update' ? '업데이트하려고 끄기' : '앱 닫기')) window.desktop?.forceClose?.(what);
+  };
 }
 
 function bind() {
@@ -224,7 +234,7 @@ function bind() {
   // 단축키 (설정에서 바꿀 수 있음: keys.js)
   const chapterStep = (d) => { const o = app.project.order; const i = o.indexOf(app.cur) + d; if (i >= 0 && i < o.length) openChapter(o[i]); };
   bindKeys({
-    save: () => { app.dirty = true; saveNow().then(() => toast('저장했어요.', 1500)); },
+    save: () => { app.dirty = true; saveNow().then((ok) => { if (ok) toast('저장했어요.', 1500); }); },
     print: () => ACTIONS.print(),
     undo: () => runCommand(app.editor, 'undo'), redo: () => runCommand(app.editor, 'redo'),
     find: () => F.openFind(), replace: () => { F.openFind(); $('#replaceInput').focus(); },
@@ -259,7 +269,7 @@ function bind() {
   // 창을 닫거나 다른 앱으로 갈 때 바로 저장
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow().then(flushSync); });
   window.addEventListener('pagehide', () => saveNow());
-  window.addEventListener('beforeunload', (e) => { if (app.dirty) { saveNow(); e.preventDefault(); } });
+  window.addEventListener('beforeunload', (e) => { if (hasUnsaved()) { saveNow(); e.preventDefault(); } });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {});
 }
 

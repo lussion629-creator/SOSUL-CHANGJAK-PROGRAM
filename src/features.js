@@ -4,11 +4,14 @@ import * as G from './gdrive.js';
 import * as SV from './syncserver.js';
 import {
   app, saveNow, openProject, openChapter, addChapter, renderBinder, saveSettings, applySettings, updateCounts,
-  todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, setSyncState, usingServer, isOffline, syncTarget, bundleForSync, STATUS, projectTotal, beforeImport,
+  todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, setSyncState, usingServer, isOffline, syncTarget, bundleForSync, STATUS, projectTotal, beforeImport, rescueFile,
 } from './app.js';
 import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
 import { setSearch, gotoMatch, findMatches } from './editor.js';
+import { getHTMLFromFragment } from '@tiptap/core';
+import { EditorState } from '@tiptap/pm/state';
+import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import { $, $$, h, toast, dialog, confirmDlg, promptDlg, ago, fullTime } from './ui.js';
 import { parseHtml, sanitizeHtml } from './sanitize.js';
 import { isAnno, annoListItem, editAnno, annosForExport } from './annotate.js';
@@ -114,9 +117,22 @@ export async function openFromFile(given) {
   try {
     const r = await openFile(f, { onProgress: (n, total) => toast(`PDF 읽는 중… ${n}/${total}쪽`, 60000) });
     if (r.kind === 'bundle') {
-      await beforeImport();
-      const exists = await S.getProject(r.data.project.id);
-      const p = await S.importBundle(r.data, { keepIds: !exists || await confirmDlg('백업 불러오기', '같은 작품이 이미 있습니다. 덮어쓸까요? (지금 내용은 버전 기록에 남습니다) “취소”를 누르면 사본으로 불러옵니다.', '덮어쓰기') });
+      const data = S.checkBundle(r.data); // 잘못된 백업이면 아무것도 바꾸기 전에 멈춘다
+      const exists = await S.getProject(data.project.id);
+      let mode = 'restore';
+      if (exists) {
+        const c = await dialog({
+          title: '백업 불러오기',
+          body: `<p>“${h(exists.title)}” 작품이 이미 있습니다.</p>
+            <p><b>백업 상태로 되돌리기</b>: 장 구성·순서·자료를 백업과 똑같이 맞춥니다. 백업에 없는 장·자료는 빠지지만, 되돌리기 전 작품 전체가 휴지통에 ‘덮어쓰기 전’으로 남아 도구 → 실수 되돌리기·복구에서 되살릴 수 있어요.</p>
+            <p><b>사본으로 불러오기</b>: 지금 작품은 그대로 두고 백업을 새 작품으로 엽니다.</p>`,
+          buttons: [{ label: '취소', value: 'close' }, { label: '사본으로 불러오기', value: 'copy' }, { label: '백업 상태로 되돌리기', value: 'restore', primary: true }],
+        });
+        if (c.value !== 'copy' && c.value !== 'restore') return;
+        mode = c.value;
+      }
+      if (!(await beforeImport())) return;
+      const p = await S.importBundle(r.data, { mode });
       await openProject(p.id);
       toast('백업을 불러왔어요.');
       return;
@@ -183,7 +199,8 @@ export async function showExport() {
       ${drive ? '<label class="check"><input type="checkbox" name="toDrive"> 구글 드라이브에도 저장 (Word는 Google 문서로 변환)</label>' : '<p class="hint" style="margin:0">구글 드라이브에 연결하면 내보낸 파일을 드라이브에도 바로 넣을 수 있어요.</p>'}
       <p class="hint" style="margin:0">.doc는 Word와 한글이 그대로 여는 RTF 방식으로 저장됩니다. .hwp(옛 한글 형식)로 저장하는 기능은 공개된 방법이 없어 .hwpx로 저장합니다. 한글에서 .hwpx를 연 뒤 ‘다른 이름으로 저장’하면 .hwp로 바꿀 수 있어요.</p>`,
     buttons: [{ label: '취소', value: 'close' }, { label: '내보내기', value: 'ok', primary: true }],
-    onOpen: (f) => f.querySelector('[data-open-setup]').addEventListener('click', () => showPageSetup()),
+    // 쪽 설정을 열고 돌아오면 내보내기 창의 입력값은 그대로, 쪽 설정 요약만 새로
+    onOpen: (f) => f.querySelector('[data-open-setup]').addEventListener('click', async () => { await showPageSetup(); const b = f.querySelector('.ps-sum b'); if (b) b.textContent = layoutSummary(); }),
   });
   if (r.value !== 'ok') return;
   const f = r.form;
@@ -231,7 +248,8 @@ export function printBook(book = bookOf('all'), opt = { titlePage: true, chapter
 }
 
 export async function downloadBackup() {
-  await saveNow();
+  // 기기에 저장하지 못했으면 기기 것은 옛 원고이므로, 메모리의 최신 원고로 복구 파일을 만든다
+  if (!(await saveNow())) { await rescueFile(); return; }
   const b = S.packBundle(await S.exportBundle(app.project.id));
   download(new Blob([JSON.stringify(b)], { type: 'application/json' }), `${app.project.title}.novel.json`);
   toast('작품 전체(자료·버전 기록 포함)를 백업 파일로 받았어요.');
@@ -569,7 +587,7 @@ export async function driveImport() {
     });
     if (!r.value || r.value === 'close') return;
     const b = await G.pullBundle(r.value, S.readBundleBytes);
-    await beforeImport();
+    if (!(await beforeImport())) return;
     const p = await S.importBundle(b);
     const f = files.find((x) => x.id === r.value);
     p.syncedAt = f.modifiedTime;
@@ -708,7 +726,7 @@ export async function serverImport() {
     if (!r.value || r.value === 'close') return;
     const f = files.find((x) => x.id === r.value);
     const b = await SV.pullBundle(r.value, S.readBundleBytes);
-    await beforeImport();
+    if (!(await beforeImport())) return;
     const p = await S.importBundle(b);
     p.srvSyncedAt = f.modifiedTime;
     await S.putProject(p);
@@ -718,7 +736,14 @@ export async function serverImport() {
 }
 
 // ---------- 찾기 / 바꾸기 ----------
-const fs = { matches: [], i: -1 };
+// 찾기·바꾸기는 모든 장에서 같은 방식(문서 모델)으로 한다: 굵게·색 등 서식 경계를 넘는 낱말도 찾고,
+// 바꿀 말은 늘 글자 그대로 넣는다(HTML로 해석하지 않는다). 바꾼 글자는 앞 글자의 서식을 따른다.
+const fs = { matches: [], i: -1, global: null };
+const docOf = (html) => PMDOMParser.fromSchema(app.editor.schema).parse(parseHtml(html || ''));
+// 장마다 찾은 개수 (‘모든 장’): 작품 장 순서대로 [{id, n}]
+function globalCounts(q) {
+  return app.project.order.map((id) => ({ id, n: id === app.cur ? findMatches(app.editor.state.doc, q).length : findMatches(docOf(app.chapters.get(id).html), q).length }));
+}
 export function openFind() {
   const bar = $('#findbar');
   bar.hidden = false;
@@ -729,68 +754,103 @@ export function openFind() {
   runFind();
 }
 export function closeFind() { $('#findbar').hidden = true; setSearch(app.editor, ''); }
-export function runFind(move = 0) {
+export async function runFind(move = 0) {
   const q = $('#findInput').value;
+  const all = q && $('#findAllChapters').checked;
   fs.matches = setSearch(app.editor, q, { current: -1 });
-  if (!fs.matches.length) {
-    fs.i = -1;
-    let extra = '';
-    if (q && $('#findAllChapters').checked) {
-      const n = app.project.order.filter((id) => id !== app.cur).reduce((a, id) => a + (htmlToText(app.chapters.get(id).html).split(q).length - 1), 0);
-      extra = n ? ` (다른 장 ${n})` : '';
+  fs.global = all ? globalCounts(q) : null;
+  const total = fs.global ? fs.global.reduce((a, c) => a + c.n, 0) : fs.matches.length;
+  if (!total) { fs.i = -1; $('#findCount').textContent = q ? '0' : ''; return; }
+  // 지금 장에 없거나 끝을 넘으면 장 순서를 따라 다음(이전) 장으로 (끝에서는 처음으로 돈다)
+  if (all && move && (!fs.matches.length || (move > 0 && fs.i >= fs.matches.length - 1) || (move < 0 && fs.i <= 0))) {
+    const order = fs.global, k = order.findIndex((c) => c.id === app.cur);
+    for (let step = 1; step <= order.length; step++) {
+      const c = order[(k + move * step + order.length * 2) % order.length];
+      if (!c.n) continue;
+      if (c.id !== app.cur && !(await openChapter(c.id))) return; // 저장 실패로 머무름
+      fs.matches = setSearch(app.editor, q, { current: -1 });
+      fs.i = move > 0 ? 0 : fs.matches.length - 1;
+      return showMatch(q, true);
     }
-    $('#findCount').textContent = q ? '0' + extra : '';
-    return;
   }
+  if (!fs.matches.length) { fs.i = -1; showCount(); return; }
   const head = app.editor.state.selection.from;
   if (fs.i < 0 || fs.i >= fs.matches.length) fs.i = Math.max(0, fs.matches.findIndex((m) => m.from >= head));
   fs.i = (fs.i + move + fs.matches.length) % fs.matches.length;
+  showMatch(q, !!move);
+}
+function showMatch(q, go) {
   fs.matches = setSearch(app.editor, q, { current: fs.i });
-  $('#findCount').textContent = `${fs.i + 1}/${fs.matches.length}`;
-  if (move) gotoMatch(app.editor, fs.matches[fs.i]);
+  showCount();
+  if (go && fs.matches[fs.i]) gotoMatch(app.editor, fs.matches[fs.i]);
+}
+// 표시: 전체 기준 지금/총수 (‘모든 장’이면 장 순서로 센 번호)
+function showCount() {
+  if (!fs.global) { $('#findCount').textContent = fs.matches.length ? `${fs.i + 1}/${fs.matches.length}` : '0'; return; }
+  const total = fs.global.reduce((a, c) => a + c.n, 0);
+  const before = fs.global.slice(0, fs.global.findIndex((c) => c.id === app.cur)).reduce((a, c) => a + c.n, 0);
+  $('#findCount').textContent = fs.i >= 0 && fs.matches.length ? `${before + fs.i + 1}/${total}` : `0 (다른 장 ${total})`;
 }
 export async function replaceOne() {
   const m = fs.matches[fs.i];
   if (!m) return runFind(1);
-  app.editor.chain().focus().insertContentAt({ from: m.from, to: m.to }, $('#replaceInput').value).run();
-  runFind(0);
+  // 글자 그대로 넣는다 (‘<b>배</b>’도 그 글자대로)
+  app.editor.view.dispatch(putText(app.editor.state.tr, m.from, m.to, $('#replaceInput').value).scrollIntoView());
+  app.editor.commands.focus();
+  await runFind(0);
   if (fs.matches.length) gotoMatch(app.editor, fs.matches[Math.min(fs.i, fs.matches.length - 1)]);
+}
+// 찾은 자리를 글자 그대로 바꾼다. 서식·주석은 찾은 낱말의 첫 글자 것을 따른다
+// (낱말 전체에 단 주석·굵게가 바꾼 뒤에도 남도록: insertText는 경계에서 앞 글자 서식을 따라 주석이 빠진다)
+function putText(tr, from, to, text) {
+  const first = tr.doc.nodeAt(from);
+  const marks = first?.isText ? first.marks : tr.doc.resolve(from).marks();
+  return text ? tr.replaceWith(from, to, tr.doc.type.schema.text(text, marks)) : tr.delete(from, to);
+}
+// 문서 하나에서 모두 바꾸기 (뒤에서부터 바꿔야 위치가 어긋나지 않는다)
+function replaceInDoc(state, q, rep) {
+  const ms = findMatches(state.doc, q).reverse();
+  let tr = state.tr;
+  for (const m of ms) tr = putText(tr, m.from, m.to, rep);
+  return { tr, n: ms.length };
 }
 export async function replaceAll() {
   const q = $('#findInput').value, rep = $('#replaceInput').value;
   if (!q) return;
-  let n = 0;
-  // 지금 장: 뒤에서부터 바꿔야 위치가 어긋나지 않는다
-  const ms = findMatches(app.editor.state.doc, q).reverse();
-  if (ms.length) {
-    const { safetyPoint } = await import('./safety.js');
+  let n = 0, chs = 0;
+  const failed = [];
+  const { safetyPoint } = await import('./safety.js');
+  // 지금 장
+  if (findMatches(app.editor.state.doc, q).length) {
     await safetyPoint(`“${q}” 모두 바꾸기 전`);
-    let tr = app.editor.state.tr;
-    for (const m of ms) tr = tr.insertText(rep, m.from, m.to);
-    app.editor.view.dispatch(tr);
-    n += ms.length;
+    const r = replaceInDoc(app.editor.state, q, rep);
+    app.editor.view.dispatch(r.tr);
+    n += r.n; chs++;
   }
   if ($('#findAllChapters').checked) {
-    await saveNow();
+    if (!(await saveNow())) { toast('지금 장을 저장하지 못해 다른 장은 바꾸지 않았어요. 저장 공간을 확인해 주세요.', 6000); runFind(); return; }
     for (const id of app.project.order) {
       if (id === app.cur) continue;
       const c = app.chapters.get(id);
-      const div = parseHtml(c.html);
-      let k = 0;
-      const w = document.createTreeWalker(div, NodeFilter.SHOW_TEXT);
-      while (w.nextNode()) { const t = w.currentNode; const parts = t.textContent.split(q); if (parts.length > 1) { k += parts.length - 1; t.textContent = parts.join(rep); } }
-      if (k) {
+      const st = EditorState.create({ doc: docOf(c.html), schema: app.editor.schema });
+      const r = replaceInDoc(st, q, rep);
+      if (!r.n) continue;
+      const before = c.html;
+      try {
         await S.addSnapshot(c, 'safety', `“${q}” 모두 바꾸기 전`);
-        c.html = div.innerHTML; c._count = null; c._paras = undefined; c.updated = Date.now();
+        c.html = getHTMLFromFragment(r.tr.doc.content, app.editor.schema);
+        c._count = null; c._paras = undefined; c.updated = Date.now();
         await S.putChapter(c);
         app.states.delete(id);
-        n += k;
-      }
+        n += r.n; chs++;
+      } catch (e) { c.html = before; failed.push(c.title); console.warn(e); }
     }
     renderBinder();
   }
   runFind();
-  toast(`${n}곳을 바꿨어요. 바꾸기 전 원고는 버전 기록에 남겼어요. (Ctrl+Z 또는 도구 → 실수 되돌리기)`, 5000);
+  toast(failed.length
+    ? `${chs}개 장 ${n}곳을 바꿨지만 ${failed.join(', ')}은(는) 저장하지 못해 바꾸지 않았어요.`
+    : `${chs > 1 ? `${chs}개 장 ` : ''}${n}곳을 바꿨어요. 바꾸기 전 원고는 버전 기록에 남겼어요. (Ctrl+Z 또는 도구 → 실수 되돌리기)`, 6000);
 }
 
 // ---------- 집중 모드 ----------

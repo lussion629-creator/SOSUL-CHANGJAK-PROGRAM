@@ -30,6 +30,7 @@ const TYPES = {
 app.userAgentFallback = app.userAgentFallback.replace(/\s(Electron|novel-writer|소설 워드프로세서)\/\S+/g, '');
 
 let win = null;
+const allowClose = new WeakSet(); // 저장을 마쳤거나 사용자가 '그래도 닫기'를 고른 창
 let ready = false; // 앱 화면이 다 떴는지
 let quitting = false; // 업데이트 설치로 끄는 중 (저장은 이미 마침)
 const pending = []; // 창이 준비되기 전에 들어온 파일
@@ -65,15 +66,57 @@ function sendFile(p) {
   win.webContents.send('open-file', { name: path.basename(p), data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) });
 }
 
-// 앱 화면이 시작을 마치고 파일 받을 준비가 되면 알려 온다
-// 원고를 저장하고 끌 준비 (업데이트 설치 전)
+// 앱 화면에 원고 저장을 시키고 결과를 받는다: 'ok' 저장됨 · 'fail' 기기에 못 씀 · 'timeout' 시간 안에 답이 없음 · 'error' 화면이 응답하지 않음
+// 시간 제한은 '저장됨'이 아니다. 결과는 한 번만 정해지고 타이머는 바로 치운다.
+const WAIT = { close: 8000, update: 15000 }; // 저장 답을 기다리는 시간 (ms)
+function askSave(w, ms) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; clearTimeout(timer); resolve(v); };
+    const timer = setTimeout(() => finish('timeout'), ms);
+    if (!w || w.isDestroyed()) { finish('ok'); return; }
+    w.webContents.executeJavaScript('window.__saveBeforeClose ? window.__saveBeforeClose() : true')
+      .then((ok) => finish(ok === false ? 'fail' : 'ok'), () => finish('error'));
+  });
+}
+// 저장 실패를 앱 화면에 알려 '다시 시도 / 복구 파일 / 그래도 닫기'를 고르게 한다
+const tellBlocked = (w, what) => { if (w && !w.isDestroyed()) w.webContents.executeJavaScript(`window.__closeBlocked && window.__closeBlocked(${JSON.stringify(what)})`).catch(() => {}); };
+// 답이 없을 때(화면이 멈춤 등): 기다릴지, 저장하지 않고 진행할지 묻는다
+async function askWhenSilent(w, goLabel) {
+  if (!w || w.isDestroyed()) return true;
+  const { response } = await dialog.showMessageBox(w, {
+    type: 'warning', buttons: ['기다리기', goLabel, '취소'], defaultId: 0, cancelId: 2,
+    message: '원고 저장이 아직 끝나지 않았어요.',
+    detail: '조금 더 기다리면 저장을 마칠 수 있어요. 지금 진행하면 마지막으로 저장한 뒤에 쓴 글을 잃을 수 있습니다.',
+  });
+  return response === 0 ? 'wait' : response === 1;
+}
+
+// 원고를 저장하고 끌 준비 (업데이트 설치 전). 저장하지 못하면 false: 설치를 미룬다
 async function saveForQuit() {
-  if (win) await Promise.race([win.webContents.executeJavaScript('window.__saveBeforeClose ? window.__saveBeforeClose() : null').catch(() => {}), new Promise((r) => setTimeout(r, 8000))]);
-  quitting = true;
+  const w = win;
+  for (;;) {
+    const res = await askSave(w, WAIT.update);
+    if (res === 'ok') { quitting = true; return true; }
+    if (res === 'fail') { tellBlocked(w, 'update'); return false; }
+    const a = await askWhenSilent(w, '저장하지 않고 다시 시작');
+    if (a === 'wait') continue;
+    if (a === true) { quitting = true; return true; }
+    return false;
+  }
 }
 // 앱 화면의 '업데이트 확인' 메뉴
 ipcMain.handle('check-update', (e) => (isApp(e.senderFrame?.url) ? updater.check(true) : null));
 ipcMain.handle('app-version', (e) => (isApp(e.senderFrame?.url) ? app.getVersion() : null));
+
+// 저장에 실패한 뒤 사용자가 앱 화면에서 '저장하지 않고 진행'을 고름
+ipcMain.on('force-close', (e, what) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!w || w !== win || !isApp(e.senderFrame?.url)) return;
+  if (what === 'update') { quitting = true; updater.installNow(); return; }
+  allowClose.add(w);
+  w.close();
+});
 
 ipcMain.on('renderer-ready', (e) => {
   if (!win || e.sender !== win.webContents || !isApp(e.senderFrame?.url)) return; // 앱 화면이 보낸 것만
@@ -103,19 +146,33 @@ function createWindow() {
     if (!isApp(url)) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); }
   });
 
-  // 닫기 전에 원고를 저장한다
-  let saved = false;
-  win.webContents.on('will-prevent-unload', (e) => e.preventDefault());
-  win.on('close', (e) => {
-    if (saved || quitting) return;
+  // 닫기 전에 원고를 저장한다. 닫기 시도는 한 번에 하나만(겹친 요청은 합친다),
+  // 늦게 도착한 결과는 이 창(w)에만 적용하고 이미 없어진 창이면 아무것도 하지 않는다.
+  const w = win;
+  let closing = false;
+  w.webContents.on('will-prevent-unload', (e) => e.preventDefault());
+  w.on('close', (e) => {
+    if (allowClose.has(w) || quitting) return;
     e.preventDefault();
-    const done = () => { saved = true; win.close(); };
-    win.webContents.executeJavaScript('window.__saveBeforeClose ? window.__saveBeforeClose() : null').then(done, done);
-    setTimeout(done, 8000); // 드라이브에 올리는 중이면 조금 더 기다린다
+    if (closing) return;
+    closing = true;
+    (async () => {
+      for (;;) {
+        const res = await askSave(w, WAIT.close);
+        if (w.isDestroyed()) return;
+        if (res === 'ok') break;
+        if (res === 'fail') { tellBlocked(w, 'close'); return; }
+        const a = await askWhenSilent(w, '저장하지 않고 닫기');
+        if (a === 'wait') continue;
+        if (a === true) break;
+        return;
+      }
+      if (!w.isDestroyed()) { allowClose.add(w); w.close(); }
+    })().finally(() => { closing = false; });
   });
-  win.webContents.on('did-start-loading', () => { ready = false; });
+  w.webContents.on('did-start-loading', () => { if (win === w) ready = false; });
 
-  win.on('closed', () => { win = null; ready = false; });
+  w.on('closed', () => { if (win === w) { win = null; ready = false; } });
 }
 
 // 앱 안에 다른 웹 화면(webview)을 끼워 넣지 못하게, 새 창의 이동도 막는다
@@ -149,3 +206,6 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 }
+
+// 시험용 (tests/electron-close.test.cjs)
+if (process.env.NW_TEST) module.exports = { createWindow, saveForQuit, WAIT, getWin: () => win };

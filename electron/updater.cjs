@@ -51,7 +51,7 @@ function winUpdater() {
       message: `새 버전(${info.version})을 받았어요.`,
       detail: '다시 시작하면 바로 적용됩니다. 원고는 먼저 저장해요. ‘나중에’를 고르면 앱을 끌 때 설치됩니다.',
     });
-    if (response === 0) { await beforeQuit(); au.quitAndInstall(false, true); }
+    if (response === 0 && await beforeQuit()) au.quitAndInstall(false, true); // 원고를 저장하지 못하면 설치를 미룬다
   });
   au.on('error', () => {}); // 인터넷이 없을 때 등: 조용히 다음 확인을 기다린다
   return au;
@@ -71,6 +71,9 @@ async function check(manual = false) {
   }
 }
 
+// 저장 실패 뒤 사용자가 '저장하지 않고 다시 시작'을 고른 경우
+function installNow() { if (au) au.quitAndInstall(false, true); }
+
 function start(opts) {
   getWin = opts.getWin;
   beforeQuit = opts.beforeQuit;
@@ -78,4 +81,4 @@ function start(opts) {
   setInterval(() => check(false), EVERY);
 }
 
-module.exports = { start, check };
+module.exports = { start, check, installNow };

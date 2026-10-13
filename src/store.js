@@ -254,52 +254,149 @@ export async function readBundleBytes(buf) {
   return JSON.parse(new TextDecoder().decode(buf));
 }
 
-// 백업 묶음을 들여온다. 같은 id가 있으면 덮어쓰기 전에 현재 원고를 버전 기록으로 남긴다.
-export async function importBundle(b, { keepIds = true } = {}) {
+// 백업 묶음을 검사하고 들여올 모양으로 정리한다. 잘못된 묶음은 아무것도 쓰기 전에 거절한다.
+export function checkBundle(b) {
   if (!b || b.format !== 'novel-writer') throw new Error('이 앱의 백업 파일이 아닙니다.');
+  if (b.version != null && !(+b.version >= 1 && +b.version <= 2)) throw new Error(`지원하지 않는 백업 버전입니다 (${b.version}). 앱을 최신으로 올린 뒤 다시 열어 주세요.`);
+  const p = b.project;
+  if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id) throw new Error('백업에 작품 정보가 없습니다.');
+  if (!Array.isArray(b.chapters)) throw new Error('백업에 장 목록이 없습니다.');
+  const dup = (list, what) => {
+    const seen = new Set();
+    for (const x of list) {
+      if (!x || typeof x.id !== 'string' || !x.id) throw new Error(`백업의 ${what} 아이디가 비어 있습니다.`);
+      if (seen.has(x.id)) throw new Error(`백업에 같은 ${what} 아이디가 두 번 있습니다 (${x.id}).`);
+      seen.add(x.id);
+    }
+    return seen;
+  };
+  const chIds = dup(b.chapters, '장');
+  dup(b.notes || [], '자료');
+  const order = Array.isArray(p.order) ? p.order : [];
+  const missing = order.filter((id) => !chIds.has(id));
+  if (missing.length) throw new Error(`백업의 장 순서가 없는 장을 가리킵니다 (${missing.length}개). 파일이 손상되었을 수 있어요.`);
   if ((b.snapshots || []).some((s) => s.d)) b = { ...b, snapshots: unpackSnapshots(b.snapshots) };
   // 남이 만든 백업일 수 있으니 원고 HTML에서 스크립트 등을 걸러 낸다
-  b = {
+  return {
     ...b,
-    chapters: (b.chapters || []).map((c) => ({ ...c, html: sanitizeHtml(c.html) })),
+    project: { ...p, order: [...order, ...b.chapters.map((c) => c.id).filter((id) => !order.includes(id))] },
+    chapters: b.chapters.map((c) => ({ ...c, html: sanitizeHtml(typeof c.html === 'string' ? c.html : '') })),
+    notes: b.notes || [],
     snapshots: (b.snapshots || []).map((s) => ({ ...s, html: sanitizeHtml(s.html) })),
+    daily: b.daily || [],
   };
-  const d = await db();
+}
+
+const trashItem = (item) => ({ id: uid(), time: Date.now(), ...item });
+
+/**
+ * 백업 묶음을 들여온다. 모든 쓰기는 한 트랜잭션: 중간에 실패하면 아무것도 바뀌지 않는다.
+ * mode
+ *  - 'copy'    사본: 모든 아이디를 새로 만들어 기존 작품과 섞이지 않는다.
+ *  - 'restore' 덮어쓰기: 작품을 백업 상태 그대로 되돌린다. 백업에 없는 장·자료는 지우되,
+ *              덮어쓰기 전 작품 전체를 휴지통에 ‘덮어쓰기 전’ 작품으로 남겨 되살릴 수 있다.
+ *              버전 기록은 지우지 않고 더한다. 하루 기록은 백업에 있는 날만 바꾼다.
+ *  - 'merge'   동기화: 받은 장·자료로 바꾸고, 이 기기에만 있는 장·자료는
+ *              since(마지막 동기화 시각) 뒤에 고친 것이면 남기고(다른 기기에서 지운 뒤 여기서 고침),
+ *              그 전 것이면 다른 기기에서 지운 것으로 보고 휴지통으로 옮긴다. since가 없으면 모두 남긴다.
+ *  바뀌는 장의 지금 원고는 버전 기록(‘덮어쓰기 전 이 기기 버전’)으로 남긴다.
+ */
+export async function importBundle(raw, { keepIds = true, mode = keepIds ? 'merge' : 'copy', since = 0, keepLocal = {} } = {}) {
+  let b = checkBundle(raw);
+  const copy = mode === 'copy';
   const map = new Map();
   // 아이디는 화면 HTML 속성에도 들어가므로, 이상한 글자가 섞인 아이디는 새로 만든다
   const nid = (old) => {
-    if (keepIds && /^[\w-]{1,64}$/.test(String(old ?? ''))) return old;
+    if (!copy && /^[\w-]{1,64}$/.test(String(old ?? ''))) return old;
     if (!map.has(old)) map.set(old, uid());
     return map.get(old);
   };
   // 자료(주석) 아이디가 바뀌면 원고 HTML의 data-anno도 함께 바꾼다
-  for (const n of b.notes || []) nid(n.id);
+  for (const n of b.notes) nid(n.id);
   const reAnno = (html) => {
     if (!html || !html.includes('data-anno=')) return html;
     let out = html;
     for (const [o, nw] of map) if (o !== nw && out.includes(`data-anno="${o}"`)) out = out.split(`data-anno="${o}"`).join(`data-anno="${nw}"`);
     return out;
   };
-  b = { ...b, chapters: b.chapters.map((c) => ({ ...c, html: reAnno(c.html) })), snapshots: b.snapshots.map((s) => ({ ...s, html: reAnno(s.html) })) };
   const project = { ...b.project, id: nid(b.project.id) };
+  if (copy) for (const k of ['syncedAt', 'srvSyncedAt', 'driveFileId', 'syncedSize', 'srvSyncedSize', 'syncLocal']) delete project[k];
   // 쪽 설정 값은 화면·인쇄용 CSS에 들어가므로 숫자·참거짓·안전한 글자만 남긴다
   if (project.layout && typeof project.layout === 'object') {
     project.layout = Object.fromEntries(Object.entries(project.layout).filter(([, v]) =>
       (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'boolean' || (typeof v === 'string' && v.length < 120 && !/[<>{};\\]|\/\*/.test(v))));
   } else delete project.layout;
-  project.order = (project.order || []).map(nid);
-  for (const c of b.chapters) {
-    const id = nid(c.id);
-    const cur = await d.get('chapters', id);
-    if (cur && cur.html !== c.html) await addSnapshot(cur, 'auto', '동기화 전 이 기기 버전');
-    await d.put('chapters', { ...c, id, projectId: project.id });
+  project.order = project.order.map(nid);
+  const chapters = b.chapters.map((c) => ({ ...c, html: reAnno(c.html), id: nid(c.id), projectId: project.id }));
+  const notes = b.notes.map((n) => ({ ...n, id: nid(n.id), projectId: project.id }));
+  const snapshots = b.snapshots.map((s) => ({ ...s, html: reAnno(s.html), id: nid(s.id), chapterId: nid(s.chapterId), projectId: project.id }));
+  const daily = b.daily.filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x?.date || '')).map((r) => ({ ...r, projectId: project.id, key: `${project.id}|${r.date}` }));
+
+  const d = await db();
+  const tx = d.transaction(['projects', 'chapters', 'notes', 'snapshots', 'daily', 'kv'], 'readwrite');
+  const T = (n) => tx.objectStore(n);
+  try {
+    // 다른 작품의 장·자료와 아이디가 겹치면 거절 (그 작품을 망가뜨리지 않게)
+    for (const c of chapters) { const cur = await T('chapters').get(c.id); if (cur && cur.projectId !== project.id) throw new Error(`다른 작품의 장과 아이디가 겹칩니다 (${c.id}). ‘사본으로 불러오기’를 쓰세요.`); }
+    for (const n of notes) { const cur = await T('notes').get(n.id); if (cur && cur.projectId !== project.id) throw new Error(`다른 작품의 자료와 아이디가 겹칩니다 (${n.id}). ‘사본으로 불러오기’를 쓰세요.`); }
+    const local = copy ? null : await T('projects').get(project.id);
+    const localCh = local ? await T('chapters').index('projectId').getAll(project.id) : [];
+    const localNotes = local ? await T('notes').index('projectId').getAll(project.id) : [];
+    const incomingCh = new Set(chapters.map((c) => c.id)), incomingNotes = new Set(notes.map((n) => n.id));
+    let trash = null;
+    const addTrash = async (item) => { trash ??= ((await T('kv').get('trash')) || []); trash.unshift(trashItem(item)); };
+    const dropChapter = async (id) => {
+      await T('chapters').delete(id);
+      for (const k of await T('snapshots').index('chapterId').getAllKeys(id)) await T('snapshots').delete(k);
+    };
+
+    if (mode === 'restore' && local) {
+      // 덮어쓰기 전 작품 전체를 휴지통에 남긴다 (되살리면 사본 작품으로 돌아온다)
+      const before = {
+        format: 'novel-writer', version: 2, exported: Date.now(), project: local,
+        chapters: localCh, notes: localNotes,
+        snapshots: packSnapshots(await T('snapshots').index('projectId').getAll(project.id)),
+        daily: (await T('daily').getAll()).filter((r) => r.projectId === project.id),
+      };
+      await addTrash({ kind: 'project', title: `${local.title} (덮어쓰기 전)`, bundle: before });
+      for (const c of localCh) if (!incomingCh.has(c.id)) await dropChapter(c.id);
+      for (const n of localNotes) if (!incomingNotes.has(n.id)) await T('notes').delete(n.id);
+    }
+
+    if (mode === 'merge' && local) {
+      // 이 기기에만 있는 장·자료
+      for (const c of localCh) {
+        if (incomingCh.has(c.id)) continue;
+        if (since && (c.updated || 0) <= since && !keepLocal[c.id]) {
+          const snaps = await T('snapshots').index('chapterId').getAll(c.id);
+          await addTrash({ kind: 'chapter', title: c.title, projectId: c.projectId, projectTitle: local.title, index: (local.order || []).indexOf(c.id), chapter: c, snapshots: packSnapshots(snaps), why: 'sync' });
+          await dropChapter(c.id);
+        } else project.order.push(c.id);
+      }
+      for (const n of localNotes) {
+        if (incomingNotes.has(n.id)) continue;
+        if (since && (n.updated || 0) <= since) await T('notes').delete(n.id);
+      }
+      if (local.syncLocal) project.syncLocal = local.syncLocal; // 이 기기의 마지막 동기화 시각은 이 기기 것
+    }
+
+    for (const c of chapters) {
+      const cur = await T('chapters').get(c.id);
+      if (cur && cur.html !== c.html) {
+        await T('snapshots').put({ id: uid(), chapterId: cur.id, projectId: cur.projectId, time: Date.now(), kind: 'auto', label: mode === 'restore' ? '덮어쓰기 전 이 기기 버전' : '동기화 전 이 기기 버전', html: cur.html, title: cur.title });
+      }
+      await T('chapters').put(c);
+    }
+    for (const n of notes) await T('notes').put(n);
+    for (const s of snapshots) if (!(await T('snapshots').get(s.id))) await T('snapshots').put(s);
+    for (const r of daily) await T('daily').put(r);
+    if (trash) await T('kv').put(trash, 'trash');
+    await T('projects').put(project);
+    await tx.done;
+  } catch (e) {
+    try { tx.abort(); } catch { /* 이미 끝남 */ }
+    await tx.done.catch(() => {});
+    throw e;
   }
-  for (const n of b.notes || []) await d.put('notes', { ...n, id: nid(n.id), projectId: project.id });
-  for (const s of b.snapshots || []) {
-    const id = nid(s.id);
-    if (!(await d.get('snapshots', id))) await d.put('snapshots', { ...s, id, chapterId: nid(s.chapterId), projectId: project.id });
-  }
-  for (const r of (b.daily || []).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x?.date || ''))) await d.put('daily', { ...r, projectId: project.id, key: `${project.id}|${r.date}` });
-  await d.put('projects', project);
   return project;
 }

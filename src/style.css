@@ -64,6 +64,7 @@ button { cursor: pointer; }
 .pill.dirty { color: var(--accent); }
 .pill.ok { color: var(--ins); }
 .pill.err { color: var(--del); }
+.pill.warn { color: #b7791f; }
 .icon-btn { background: none; border: 0; width: 34px; height: 34px; border-radius: 8px; font-size: 17px; }
 .icon-btn:hover { background: var(--bg2); }
 .only-mobile { display: none; }

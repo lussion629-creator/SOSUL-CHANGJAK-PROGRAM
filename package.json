@@ -1,6 +1,6 @@
 {
   "name": "novel-writer",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "description": "소설가를 위한 워드프로세서",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,9 @@
     "dist:win": "vite build && electron-builder --win",
     "dist:mac": "vite build && electron-builder --mac",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "server": "node server/server.mjs"
+    "server": "node server/server.mjs",
+    "test:regress": "node tests/regress.mjs",
+    "test:close": "node tests/electron-close.test.cjs"
   },
   "author": "lussion629-creator",
   "license": "ISC",

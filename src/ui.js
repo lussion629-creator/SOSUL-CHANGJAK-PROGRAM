@@ -28,24 +28,73 @@ export function toastAction(msg, label, fn, ms = 9000) {
  * @param {{title:string, body:string, buttons?:{label,value,primary?,left?}[], onOpen?:(form)=>void, wide?:boolean}} o
  * @returns {Promise<{value:string, form:HTMLFormElement}>}
  */
+// 대화상자는 겹쳐 열 수 있다: 열린 대화상자(부모)에서 다른 대화상자(자식)를 열면 부모의 폼을 입력값·이벤트째 보관했다가
+// 자식이 어떻게 끝나든(확인·취소·Esc·프로그램이 닫음) 부모를 그대로 다시 보여 준다.
+// 각 대화상자의 결과(Promise)는 끝나는 길이 무엇이든 정확히 한 번 정해진다.
+const dlgStack = []; // 보관한 부모: { entry, form, width }
+let activeDlg = null; // { resolve, settled, form }
 export function dialog({ title, body, buttons = [{ label: '닫기', value: 'close' }], onOpen, wide }) {
   const dlg = $('#dlg');
-  if (dlg.open) dlg.close('close');
-  // 이전 대화 상자의 이벤트가 남지 않도록 폼을 새로 만든다
   const old = $('#dlgForm');
   const form = old.cloneNode(false);
-  old.replaceWith(form);
+  if (dlg.open && activeDlg && !activeDlg.settled && activeDlg.form === old) {
+    // 부모 보관: 폼을 떼어 두기만 하고 대화상자는 닫지 않는다
+    activeDlg.detach();
+    dlgStack.push({ entry: activeDlg, form: old, width: dlg.style.width });
+    old.replaceWith(form);
+  } else {
+    if (dlg.open) dlg.close('close');
+    old.replaceWith(form);
+  }
   dlg.style.width = wide ? 'min(860px, calc(100vw - 24px))' : '';
   form.innerHTML = `
     <div class="dlg-head"><h2>${h(title)}</h2><button value="close" class="icon-btn" title="닫기" formnovalidate>✕</button></div>
     <div class="dlg-body">${body}</div>
     ${buttons.length ? `<div class="dlg-foot">${buttons.map((b) => `<button value="${b.value}" class="${b.primary ? 'primary' : ''} ${b.left ? 'left' : ''}" ${b.value === 'close' || b.left ? 'formnovalidate' : ''}>${h(b.label)}</button>`).join('')}</div>` : ''}`;
-  // 닫기 이벤트(close)는 늦게 도착해 다음 대화 상자와 섞일 수 있어, 이 폼의 submit과 Esc(cancel)로 결과를 받는다
   return new Promise((resolve) => {
-    form.addEventListener('submit', (e) => resolve({ value: e.submitter?.value || 'close', form }));
-    const onCancel = () => { dlg.removeEventListener('cancel', onCancel); resolve({ value: 'close', form }); };
-    dlg.addEventListener('cancel', onCancel);
-    form.addEventListener('submit', () => dlg.removeEventListener('cancel', onCancel));
+    const entry = { settled: false, form };
+    const cleanup = () => {
+      dlg.removeEventListener('cancel', onCancel);
+      dlg.removeEventListener('close', onClose);
+    };
+    // 결과를 정한다. 부모 대화상자로 돌아가면 true
+    const settle = (value) => {
+      if (entry.settled) return false;
+      entry.settled = true;
+      cleanup();
+      if (activeDlg === entry) activeDlg = null;
+      resolve({ value, form });
+      const top = dlgStack[dlgStack.length - 1];
+      if (!top || $('#dlgForm') !== form) return false;
+      dlgStack.pop();
+      form.replaceWith(top.form);
+      dlg.style.width = top.width;
+      activeDlg = top.entry;
+      top.entry.reattach();
+      if (!dlg.open) dlg.showModal();
+      return true;
+    };
+    entry.resolve = settle;
+    entry.detach = cleanup;
+    // Esc: 이 대화상자만 끝낸다 (부모가 있으면 부모로 돌아간다)
+    const onCancel = (e) => {
+      if ($('#dlgForm') !== form) return;
+      e.preventDefault();
+      if (!settle('close')) dlg.close('close');
+    };
+    // 프로그램이 dlg.close를 부른 경우 등 어떤 길로든 닫힘. 다른 대화상자로 바뀐 뒤의 늦은 이벤트는 무시
+    // (닫자마자 새 대화상자를 열면 앞의 close 이벤트가 새 것이 열린 뒤에 도착한다: 열려 있는 동안 온 close는 앞의 것)
+    const onClose = () => {
+      if (!form.isConnected) settle('close');
+      else if ($('#dlgForm') === form && !dlg.open) settle(dlg.returnValue || 'close');
+    };
+    entry.reattach = () => { dlg.addEventListener('cancel', onCancel); dlg.addEventListener('close', onClose); };
+    entry.reattach();
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = e.submitter?.value || 'close';
+      if (!settle(v) && dlg.open && $('#dlgForm') === form) dlg.close(v);
+    });
     // 입력 칸에서 Enter는 '확인'(주 단추)으로 (기본 동작이면 맨 앞의 ✕가 눌린다)
     form.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' || e.isComposing || e.target.tagName !== 'INPUT' || ['checkbox', 'radio', 'file', 'button'].includes(e.target.type)) return;
@@ -53,12 +102,12 @@ export function dialog({ title, body, buttons = [{ label: '닫기', value: 'clos
       e.preventDefault();
       if (p) form.requestSubmit(p);
     });
+    activeDlg = entry;
     dlg.returnValue = '';
-    dlg.showModal();
+    if (!dlg.open) dlg.showModal();
     onOpen?.(form, dlg);
   });
 }
-
 export async function confirmDlg(title, msg, okLabel = '확인', danger = false) {
   const r = await dialog({ title, body: `<p style="margin:0;line-height:1.6">${msg}</p>`, buttons: [{ label: '취소', value: 'close' }, { label: okLabel, value: 'ok', primary: !danger, left: false }] });
   return r.value === 'ok';
