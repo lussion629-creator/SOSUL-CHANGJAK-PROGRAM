@@ -621,6 +621,21 @@ await test('쪽 보기: 아주 긴 장(수십 쪽)을 처음 열어도 모든 �
   await ctx.close();
 });
 
+await test('Word 내보내기: 어절 단위 쪽 설정이면 한글 단어 잘림 허용을 끄고(기본 문단 wordWrap=1), 글자 단위면 문단마다 켠다', async () => {
+  const { ctx, page } = await boot();
+  const xml = async (breakWord) => run(page, `
+    const io = await import('/src/io/index.js'); const L = { ...(await import('/src/layout.js')).layoutOf(), breakWord: arg };
+    const out = await io.exportBook('docx', { title: 'T', chapters: [{ title: '1', html: '<p>가시는 재가 되어도 남아있는 독성 때문에</p>' }] }, { layout: L, titlePage: false, chapterTitles: false });
+    const u = new Uint8Array(await out.blob.arrayBuffer()); let t = ''; for (const x of u) t += String.fromCharCode(x); return btoa(t);`, breakWord)
+    .then(async (b64) => { const z = await (await import('jszip')).default.loadAsync(Buffer.from(b64, 'base64')); return { doc: await z.file('word/document.xml').async('string'), sty: await z.file('word/styles.xml').async('string') }; });
+  const w = await xml('word');
+  assert(/<w:pPrDefault><w:pPr><w:wordWrap w:val="1"\/>/.test(w.sty), '기본 문단에 wordWrap=1 없음');
+  assert(!w.doc.includes('w:wordWrap w:val="0"'), '어절 단위인데 단어 잘림 허용이 켜짐');
+  const c = await xml('char');
+  assert(c.doc.includes('<w:wordWrap w:val="0"/>'), '글자 단위인데 단어 잘림 허용이 꺼짐');
+  await ctx.close();
+});
+
 // ---------------- 유의어 창 ----------------
 await test('유의어 창: 구절 통째로 바꾸기는 고른 구절을 새로 쓴 표현으로 바꾸고, 서식을 지킨다 (AI는 흉내)', async () => {
   const { ctx, page } = await boot({ synProvider: 'openai', ai: { provider: 'openai', models: { openai: 'gpt-test-mini' } } });

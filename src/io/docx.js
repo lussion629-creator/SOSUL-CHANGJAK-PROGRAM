@@ -77,7 +77,8 @@ export async function writeDocx(book, opt = {}) {
     else if (pf.line != null) Object.assign(sp, L ? { line: Math.round(pt * pf.line / 100 * 20), lineRule: LineRuleType.EXACT } : { line: Math.round(240 * pf.line / 100), lineRule: LineRuleType.AUTO });
     if (pf.before != null) sp.before = Math.round(pf.before * 20);
     if (pf.after != null) sp.after = Math.round(pf.after * 20);
-    return { indent: Object.keys(indent).length ? indent : undefined, spacing: Object.keys(sp).length ? sp : undefined, wordWrap: pf.brk ? pf.brk !== 'char' : keepWord };
+    return { indent: Object.keys(indent).length ? indent : undefined, spacing: Object.keys(sp).length ? sp : undefined, // docx 라이브러리의 wordWrap: true는 <w:wordWrap w:val="0"/>(= 한글 단어 잘림 허용)이다. 어절 단위는 문서 기본값(아래)에 둔다
+      wordWrap: (pf.brk || (keepWord ? 'word' : 'char')) === 'char' };
   };
   const children = [];
 
@@ -152,10 +153,15 @@ export async function writeDocx(book, opt = {}) {
     }],
   });
   const blob = await Packer.toBlob(doc);
-  if (!L?.mirror || L.ml === L.mr) return blob;
-  // 맞쪽 여백: Word 설정 파일에 mirrorMargins를 넣는다
   const { default: JSZip } = await import('jszip');
   const zip = await JSZip.loadAsync(blob);
+  // 문서 기본 문단: 한글 단어 잘림 허용 끄기 (= 어절 단위로 줄 나눔). 글자 단위 문단은 문단마다 따로 켠다
+  const sty = await zip.file('word/styles.xml').async('string');
+  zip.file('word/styles.xml', sty.includes('<w:pPrDefault/>')
+    ? sty.replace('<w:pPrDefault/>', '<w:pPrDefault><w:pPr><w:wordWrap w:val="1"/></w:pPr></w:pPrDefault>')
+    : sty.replace(/<w:pPrDefault>\s*<w:pPr>/, '$&<w:wordWrap w:val="1"/>'));
+  if (!L?.mirror || L.ml === L.mr) return zip.generateAsync({ type: 'blob', mimeType: blob.type });
+  // 맞쪽 여백: Word 설정 파일에 mirrorMargins를 넣는다
   const st = await zip.file('word/settings.xml').async('string');
   // 스키마 순서: mirrorMargins는 displayBackgroundShape 등 뒤, evenAndOddHeaders 등 앞
   const after = /<w:(alignBordersAndEdges|bordersDoNotSurroundHeader|bordersDoNotSurroundFooter|gutterAtTop|hideSpellingErrors|hideGrammaticalErrors|activeWritingStyle|proofState|formsDesign|attachedTemplate|linkStyles|stylePaneFormatFilter|stylePaneSortMethod|documentType|mailMerge|revisionView|trackRevisions|doNotTrackMoves|doNotTrackFormatting|documentProtection|autoFormatOverride|styleLockTheme|styleLockQFSet|defaultTabStop|autoHyphenation|consecutiveHyphenLimit|hyphenationZone|doNotHyphenateCaps|showEnvelope|summaryLength|clickAndTypeStyle|defaultTableStyle|evenAndOddHeaders|bookFoldRevPrinting|bookFoldPrinting|bookFoldPrintingSheets|drawingGridHorizontalSpacing|drawingGridVerticalSpacing|displayHorizontalDrawingGridEvery|displayVerticalDrawingGridEvery|doNotUseMarginsForDrawingGridOrigin|drawingGridHorizontalOrigin|drawingGridVerticalOrigin|doNotShadeFormData|noPunctuationKerning|characterSpacingControl|printTwoOnOne|strictFirstAndLastChars|noLineBreaksAfter|noLineBreaksBefore|savePreviewPicture|doNotValidateAgainstSchema|saveInvalidXml|ignoreMixedContent|alwaysShowPlaceholderText|doNotDemarcateInvalidXml|saveXmlDataOnly|useXSLTWhenSaving|saveThroughXslt|showXMLTags|alwaysMergeEmptyNamespace|updateFields|hdrShapeDefaults|footnotePr|endnotePr|compat|docVars|rsids|mathPr|attachedSchema|themeFontLang|clrSchemeMapping|doNotIncludeSubdocsInStats|doNotAutoCompressPictures|forceUpgrade|captions|readModeInkLockDown|smartTagType|schemaLibrary|shapeDefaults|doNotEmbedSmartTags|decimalSymbol|listSeparator)[\s/>]/;
