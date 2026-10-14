@@ -117,6 +117,7 @@
         <p class="menu-cap">버전·복구</p>
         <button data-act="snapshot">지금 버전 저장 <small>이름 붙이기</small></button>
         <button data-act="recover">실수 되돌리기 · 복구 <small>휴지통</small></button>
+        <button data-act="stash">문장 보관함 <small>지우거나 잘라 낸 50자 이상 문장</small></button>
       </div>
     </div>
     <div class="menu-wrap">
@@ -218,6 +219,7 @@
         <button data-tab="binder" class="on">원고</button>
         <button data-tab="notes">자료</button>
         <button data-tab="history">기록</button>
+        <button data-tab="stash" title="지우거나 잘라 낸 50자 이상의 문장">보관함</button>
       </nav>
       <section class="tab" id="tab-binder">
         <div class="tab-head">
@@ -273,6 +275,12 @@
         </div>
         <button class="small hist-sum-btn" id="histSummary" hidden>고른 기간에 바뀐 내용 정리</button>
         <div id="historyList" class="history-list"></div>
+      </section>
+      <section class="tab" id="tab-stash" hidden>
+        <div class="tab-head"><span>문장 보관함 <small id="stashCount"></small></span></div>
+        <p class="hint">지우거나 잘라 낸 50자 이상의 문장·문단은 여기에 모두 남아요. 누르면 펼쳐지고, ‘넣기’로 커서 자리에 다시 넣을 수 있어요.</p>
+        <input id="stashSearch" class="search" placeholder="보관함 검색">
+        <ul id="stashList" class="stash-list"></ul>
       </section>
     </aside>
 

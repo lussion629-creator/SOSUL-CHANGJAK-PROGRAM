@@ -28,6 +28,7 @@ import { toggleHelp, bindHelp } from './help.js';
 import { showColors, toggleComplement } from './themecolor.js';
 import { bindZoom, zoomStep } from './zoom.js';
 import { bindSynonyms, toggleSynonyms } from './synonym.js';
+import { initStash, renderStash, openStash } from './stash.js';
 const ACTIONS = {
   checkUpdate: () => window.desktop?.checkUpdate?.(),
   readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
@@ -42,6 +43,7 @@ const ACTIONS = {
   find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, today: () => showToday(), clips: () => showClips(), sprint: F.showSprint, snapshot: manualSnapshot,
   pageView: () => togglePageView(), pageSetup: showPageSetup, fontDlg: () => showFontDialog(), paraDlg: () => showParaDialog(),
   recover: () => showRecovery(),
+  stash: () => openStash(),
   book: () => { closeRevision(); toggleBook(undefined, isBookOpen() ? {} : { noCh: false }); },
   bookPlain: () => { closeRevision(); toggleBook(!(isBookOpen() && app.settings.bookNoCh), { noCh: true }); },
   bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
@@ -56,6 +58,7 @@ async function boot() {
   if (app.settings.sidebarHidden && !matchMedia('(max-width: 820px)').matches) document.body.classList.add('sb-hidden');
   await loadTemplates();
   initEditor();
+  initStash();
   app.openRevision = openRevision;
   app.hooks.toolbar = () => { showSizeInBox(); showSpacingInBox(); };
   G.configure(app.settings.driveClientId);
@@ -207,6 +210,7 @@ function bind() {
     $$('.tab').forEach((t) => (t.hidden = t.id !== 'tab-' + b.dataset.tab));
     if (b.dataset.tab === 'history') renderHistory();
     if (b.dataset.tab === 'notes') F.renderNotes();
+    if (b.dataset.tab === 'stash') renderStash();
   }));
   ['#hfYear', '#hfMonth', '#hfDay'].forEach((sel, i) => $(sel).addEventListener('change', () => {
     // 위 단계를 바꾸면 아래 단계는 처음부터

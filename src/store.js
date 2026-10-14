@@ -56,11 +56,12 @@ export async function createProject(title = '새 작품', chapters = [{ title: '
 
 export async function deleteProject(id) {
   const d = await db();
-  const tx = d.transaction(['projects', 'chapters', 'notes', 'snapshots'], 'readwrite');
+  const tx = d.transaction(['projects', 'chapters', 'notes', 'snapshots', 'kv'], 'readwrite');
   for (const store of ['chapters', 'notes', 'snapshots']) {
     const keys = await tx.objectStore(store).index('projectId').getAllKeys(id);
     for (const k of keys) await tx.objectStore(store).delete(k);
   }
+  await tx.objectStore('kv').delete(stashKey(id));
   await tx.objectStore('projects').delete(id);
   await tx.done;
 }
@@ -186,6 +187,23 @@ export async function dailyAll() { return (await db()).getAll('daily'); }
 export async function kvGet(k, def) { const v = await (await db()).get('kv', k); return v === undefined ? def : v; }
 export async function kvSet(k, v) { await (await db()).put('kv', v, k); }
 
+// ---------- 문장 보관함 (지우거나 잘라 낸 긴 문장) ----------
+// 항목: { id, t, text, kind: 'cut'|'del', ch, title }. 지운 항목은 gone으로 남겨 다른 기기와 맞출 때 되살아나지 않게 한다.
+export const stashKey = (pid) => `stash:${pid}`;
+export async function stashOf(pid) { return kvGet(stashKey(pid), []); }
+export async function putStash(pid, list) { await kvSet(stashKey(pid), list); }
+export function mergeStash(a = [], b = []) {
+  const m = new Map();
+  for (const x of [...a, ...b]) {
+    if (!x || typeof x.id !== 'string' || (typeof x.text !== 'string' && !x.gone)) continue;
+    const cur = m.get(x.id);
+    if (!cur) { m.set(x.id, x); continue; }
+    if (x.gone || cur.gone) m.set(x.id, { id: x.id, t: Math.max(x.t || 0, cur.t || 0), gone: true, text: '' });
+    else if ((x.t || 0) > (cur.t || 0)) m.set(x.id, x);
+  }
+  return [...m.values()].sort((x, y) => (x.t || 0) - (y.t || 0));
+}
+
 // ---------- 백업 (드라이브 동기화·파일 백업용) ----------
 export async function exportBundle(projectId, { withHistory = true } = {}) {
   const d = await db();
@@ -194,7 +212,8 @@ export async function exportBundle(projectId, { withHistory = true } = {}) {
   const notes = await notesOf(projectId);
   const snapshots = withHistory ? await d.getAllFromIndex('snapshots', 'projectId', projectId) : [];
   const daily = await dailyOf(projectId);
-  return { format: 'novel-writer', version: 1, exported: Date.now(), project, chapters, notes, snapshots, daily };
+  const stash = await stashOf(projectId);
+  return { format: 'novel-writer', version: 1, exported: Date.now(), project, chapters, notes, snapshots, daily, stash };
 }
 
 // 버전 기록을 작게 묶기: 장마다 시간순으로 늘어놓고, 바로 앞 버전과 비교해 달라진 문단만 담는다.
@@ -284,6 +303,7 @@ export function checkBundle(b) {
     notes: b.notes || [],
     snapshots: (b.snapshots || []).map((s) => ({ ...s, html: sanitizeHtml(s.html) })),
     daily: b.daily || [],
+    stash: Array.isArray(b.stash) ? b.stash.filter((x) => x && typeof x.id === 'string' && (typeof x.text === 'string' || x.gone)).map((x) => ({ ...x, text: x.gone ? '' : x.text, title: typeof x.title === 'string' ? x.title : '' })) : [],
   };
 }
 
@@ -390,6 +410,12 @@ export async function importBundle(raw, { keepIds = true, mode = keepIds ? 'merg
     for (const n of notes) await T('notes').put(n);
     for (const s of snapshots) if (!(await T('snapshots').get(s.id))) await T('snapshots').put(s);
     for (const r of daily) await T('daily').put(r);
+    // 문장 보관함은 양쪽을 합친다 (어느 기기에서 담은 문장도 잃지 않게)
+    if (b.stash.length) {
+      const inc = b.stash.map((x) => ({ ...x, ch: x.ch && map.has(x.ch) ? map.get(x.ch) : x.ch }));
+      const cur = copy ? [] : ((await T('kv').get(stashKey(project.id))) || []);
+      await T('kv').put(mergeStash(cur, inc), stashKey(project.id));
+    }
     if (trash) await T('kv').put(trash, 'trash');
     await T('projects').put(project);
     await tx.done;

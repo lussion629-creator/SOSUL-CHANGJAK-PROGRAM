@@ -116,6 +116,15 @@ body.sb-hidden .main > .sidebar { visibility: hidden; overflow: hidden; border: 
 .note-list li { padding: 8px 10px; border-radius: 8px; cursor: pointer; }
 .note-list li:hover { background: var(--bg2); }
 .note-list .k { font-size: 11px; color: var(--accent); margin-right: 6px; }
+.stash-list { list-style: none; margin: 0; padding: 0 6px 12px; overflow-y: auto; flex: 1; }
+.stash-list li { padding: 8px 10px; border-radius: 8px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.stash-list li:hover { background: var(--bg2); }
+.stash-list li.empty { color: var(--ink3); cursor: default; border: 0; font-size: 13px; }
+.stash-text { margin: 0 0 4px; font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.stash-list li.open .stash-text { display: block; -webkit-line-clamp: none; }
+.stash-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; font-size: 11px; color: var(--ink3); }
+.stash-btns { display: flex; gap: 4px; }
+.tabs button.new::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
 .note-list .d { font-size: 12px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .history-list { overflow-y: auto; flex: 1; padding: 0 6px 12px; }

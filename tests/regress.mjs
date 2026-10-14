@@ -726,6 +726,62 @@ await test('내보내기: 처음에는 표지(작품 제목)·장 제목 없이,
   await ctx.close();
 });
 
+// ---------------- 문장 보관함 ----------------
+await test('문장 보관함: 고른 글 지우기·잘라내기·이어서 지우기는 50자 이상이면 담고, 짧은 것·되돌리기는 담지 않으며 백업에 함께 간다', async () => {
+  const { ctx, page } = await boot();
+  const long1 = '그날 밤 그는 오래된 편지를 다시 꺼내 읽었고, 거기 적힌 문장 하나하나가 낯설게 느껴져서 한참 동안 창밖만 바라보았다.';
+  const long2 = '바람이 멎자 골목은 이상할 만큼 조용해졌고 아이들은 하나둘 집으로 돌아가며 서로의 이름을 작게 불렀다. 그 소리가 오래 남았다.';
+  const long3 = '마지막 문장은 한 글자씩 지워도 모여서 보관함에 들어가야 하는 아주 긴 문장인데, 오십 자를 넘기려고 조금 더 길게 쓴다.';
+  const { id } = await mkProject(page, [{ title: '첫 장', html: `<p>${long1}</p><p>짧은 문장.</p><p>${long2}</p><p>${long3}</p>` }]);
+  const sel = (i) => run(page, `const d = A.app.editor.state.doc; let n = 0, r; d.forEach((c, off) => { if (n++ === arg) r = [off + 1, off + 1 + c.content.size]; }); A.app.editor.commands.setTextSelection({ from: r[0], to: r[1] }); A.app.editor.view.focus(); return r;`, i);
+  const stash = () => run(page, `return (await S.stashOf(arg)).filter((x) => !x.gone);`, id);
+  const wait = (ms = 250) => page.waitForTimeout(ms);
+  // 1) 고른 긴 문장을 Backspace로 지움
+  await sel(0); await page.keyboard.press('Backspace'); await wait();
+  let st = await stash();
+  assert(st.length === 1 && st[0].text === long1 && st[0].kind === 'del' && st[0].title === '첫 장', '지운 문장이 담겨야 함: ' + JSON.stringify(st));
+  // 2) 짧은 문장은 담지 않음
+  await sel(1); await page.keyboard.press('Delete'); await wait();
+  assert((await stash()).length === 1, '짧은 문장은 담지 않음');
+  // 3) 되돌리기로 돌아왔다 다시 사라지는 것은 담지 않음 (되돌리기·다시 하기)
+  await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z'); await page.keyboard.press('Control+Shift+z'); await wait();
+  assert((await stash()).length === 1, '되돌리기는 담지 않음');
+  // 4) 잘라내기
+  const n = await run(page, `return A.app.editor.state.doc.childCount;`);
+  const idx2 = await run(page, `let k = -1, n = 0; A.app.editor.state.doc.forEach((c) => { if (c.textContent === arg) k = n; n++; }); return k;`, long2);
+  assert(idx2 >= 0, '두 번째 긴 문장 찾기 ' + n);
+  await sel(idx2); await page.keyboard.press('Control+x'); await wait();
+  st = await stash();
+  assert(st.some((x) => x.text === long2 && x.kind === 'cut'), '잘라 낸 문장이 담겨야 함');
+  // 5) 문단 끝에서 Backspace를 이어서 눌러 지움 → 모여서 하나로 담김
+  const idx3 = await run(page, `let k = -1, n = 0; A.app.editor.state.doc.forEach((c) => { if (c.textContent === arg) k = n; n++; }); return k;`, long3);
+  const r = await sel(idx3);
+  await run(page, `A.app.editor.commands.setTextSelection(arg); A.app.editor.view.focus();`, r[1]);
+  for (let i = 0; i < long3.length; i++) await page.keyboard.press('Backspace');
+  await page.keyboard.type('새 글'); // 다른 입력이 들어오면 모은 것을 담는다
+  await wait(400);
+  st = await stash();
+  assert(st.some((x) => x.text === long3), '이어서 지운 글이 하나로 담겨야 함: ' + JSON.stringify(st.map((x) => x.text)));
+  assert(st.length === 3, '세 개여야 함 ' + st.length);
+  // 6) 보관함 탭에 보이고, 넣기로 다시 넣을 수 있음
+  await page.click('.tabs [data-tab="stash"]');
+  await page.waitForSelector('#stashList li[data-id]');
+  assert((await page.$$('#stashList li[data-id]')).length === 3, '목록 3개');
+  await page.fill('#stashSearch', '골목');
+  await page.waitForTimeout(200);
+  assert((await page.$$('#stashList li[data-id]')).length === 1, '검색 결과 1개');
+  await page.click('#stashList li[data-id] [data-do=insert]');
+  assert((await run(page, `return A.app.editor.getText();`)).includes(long2), '넣기로 다시 들어가야 함');
+  // 7) 백업 묶음에 들어가고, 다른 기기에서 받으면 합쳐짐 (지운 항목은 되살아나지 않음)
+  const b = await run(page, `return S.packBundle(await S.exportBundle(arg));`, id);
+  assert(b.stash.filter((x) => !x.gone).length === 3, '백업에 담겨야 함');
+  await run(page, `const l = await S.stashOf(arg); l[0].gone = true; l[0].text = ''; l.push({ id: 'local1', t: Date.now(), text: '이 기기에서만 담은 문장', kind: 'del' }); await S.putStash(arg, l);`, id);
+  await run(page, `await S.importBundle(arg, { mode: 'merge' });`, b);
+  st = await stash();
+  assert(st.length === 3 && st.some((x) => x.id === 'local1') && !st.some((x) => x.text === long1), '합치기: ' + JSON.stringify(st.map((x) => x.text.slice(0, 6))));
+  await ctx.close();
+});
+
 export { browser, boot, run, mkProject, typeInto, pressDialog, test, assert, results };
 if (!process.env.NO_CLOSE) {
   await browser.close();
