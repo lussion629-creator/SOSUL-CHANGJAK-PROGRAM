@@ -7,7 +7,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https://*.googleusercontent.com",
-  "connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://generativelanguage.googleapis.com https://api.openai.com https://api.anthropic.com https: http:",
+  "connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://generativelanguage.googleapis.com https://texttospeech.googleapis.com https://api.openai.com https://api.anthropic.com https: http:",
   "media-src 'self' blob: data:",
   'frame-src https://accounts.google.com',
   "worker-src 'self' blob:",

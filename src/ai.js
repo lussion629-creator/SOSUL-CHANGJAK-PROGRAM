@@ -7,7 +7,7 @@ export const PROVIDERS = {
   gemini: {
     label: 'Google Gemini', short: 'Gemini', ls: 'nw-gemini-key', site: 'https://aistudio.google.com/apikey', siteName: 'Google AI Studio',
     def: 'gemini-flash-latest', hint: 'AI Studio에서 받은 키 (낭독 키와 같아요)',
-    suggest: ['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'],
+    suggest: ['gemini-flash-latest', 'gemini-4-argon', 'gemini-flash-lite-latest', 'gemini-pro-latest'],
   },
   openai: {
     label: 'OpenAI GPT', short: 'GPT', ls: 'nw-openai-key', site: 'https://platform.openai.com/api-keys', siteName: 'OpenAI Platform',
@@ -190,6 +190,7 @@ export async function showAiSettings({ back } = {}) {
       <label class="field"><span>모델</span>
         <span class="ai-model"><input name="model_${p}" list="aiList_${p}" value="${h(modelOf(p))}" placeholder="목록 불러오기를 누르거나 모델 이름을 적어 주세요" spellcheck="false" autocomplete="off"><button type="button" class="small" data-a="list" data-p="${p}">목록 불러오기</button></span>
         <datalist id="aiList_${p}">${P.suggest.map((m) => `<option value="${h(m)}">`).join('')}</datalist></label>
+      ${P.suggest.length ? `<span class="chip-row ai-quick">${P.suggest.map((m) => `<button type="button" class="small" data-a="pick" data-p="${p}" data-m="${h(m)}">${h(m)}</button>`).join('')}</span>` : ''}
     </section>`;
   };
   const r = await dialog({
@@ -222,6 +223,7 @@ export async function showAiSettings({ back } = {}) {
       f.addEventListener('click', async (e) => {
         const b = e.target.closest('[data-a]');
         if (!b) return;
+        if (b.dataset.a === 'pick') { f[`model_${b.dataset.p}`].value = b.dataset.m; return; }
         busy?.abort(); busy = new AbortController();
         const p = b.dataset.p || prov();
         if (b.dataset.a === 'list') {

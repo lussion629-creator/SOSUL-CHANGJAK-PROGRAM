@@ -21,6 +21,8 @@ export const MODELS = [
   { id: 'gemini-3.1-flash-tts-preview', label: 'Gemini 3.1 Flash TTS (미리보기)', hint: '', price: [[1, 20], [1, 20]] },
   { id: 'gemini-2.5-flash-preview-tts', label: 'Gemini 2.5 Flash TTS (이전 세대)', hint: '', price: null },
   { id: 'gemini-2.5-pro-preview-tts', label: 'Gemini 2.5 Pro TTS (이전 세대)', hint: '', price: null },
+  // 구글 클라우드 Text-to-Speech: 목소리 이름은 Gemini와 같고, 연기 지시 없이 빠르고 고르게 읽는다 (100만 자당 약 30달러)
+  { id: 'chirp3-hd', label: 'Chirp 3 HD (구글 클라우드 TTS)', hint: '빠르고 고름 · 연기 지시 없음 · Cloud TTS API 필요', price: null, perChar: 30 },
 ];
 // 기본 제공 목소리 30개 (구글이 붙인 성격 + 대략의 성별. 미리 듣기로 확인하는 것이 가장 정확하다)
 export const VOICES = [
@@ -58,6 +60,12 @@ export function cfg() {
 export function getKey() {
   try { return sessionStorage.getItem(KEY_LS) || localStorage.getItem(KEY_LS) || ''; } catch { return ''; }
 }
+// Chirp(구글 클라우드 TTS)용 키: 따로 넣지 않으면 Gemini 키를 쓴다. 이 기기에만 저장
+const CLOUD_LS = 'nw-gcloud-key';
+export const isChirp = (m) => /^chirp/i.test(m || '');
+export function cloudKey() { try { return localStorage.getItem(CLOUD_LS) || ''; } catch { return ''; } }
+function setCloudKey(k) { try { if (k) localStorage.setItem(CLOUD_LS, k); else localStorage.removeItem(CLOUD_LS); } catch { /* 무시 */ } }
+export const keyFor = (c = cfg()) => (isChirp(c.model) ? cloudKey() || getKey() : getKey());
 function setKey(k, remember) {
   try {
     localStorage.removeItem(KEY_LS); sessionStorage.removeItem(KEY_LS);
@@ -68,15 +76,23 @@ const keyRemembered = () => { try { return !!localStorage.getItem(KEY_LS); } cat
 const maskKey = (k) => (k ? k.slice(0, 4) + '…' + k.slice(-4) : '');
 
 // ---------- 가격·사용량 ----------
+// 이 키로 쓸 수 있는 음성(TTS) 모델 이름들 (구글 모델 목록에서)
+export async function ttsModels(key = getKey()) {
+  const r = await fetch(`${API}/models?pageSize=1000`, { headers: { 'x-goog-api-key': key } });
+  if (!r.ok) throw new Error(r.status === 400 || r.status === 403 ? 'API 키를 확인해 주세요.' : `모델 목록을 불러오지 못했어요 (${r.status}).`);
+  const j = await r.json();
+  return (j.models || []).map((m) => m.name.replace(/^models\//, '')).filter((id) => /tts/i.test(id)).sort();
+}
 function priceOf(model) {
   const m = MODELS.find((x) => x.id === model);
   if (!m?.price) return null;
   return new Date() < new Date('2027-01-01T00:00:00') ? m.price[0] : m.price[1];
 }
+const perChar = (model) => MODELS.find((x) => x.id === model)?.perChar || 0;
 export function estimate(chars, model = cfg().model) {
   const secs = chars * cfg().spc;
   const p = priceOf(model);
-  const usd = p ? (chars * 1.2 * p[0] + secs * 25 * p[1]) / 1e6 : null;
+  const usd = perChar(model) ? chars * perChar(model) / 1e6 : p ? (chars * 1.2 * p[0] + secs * 25 * p[1]) / 1e6 : null;
   return { secs, usd };
 }
 const fmtSecs = (s) => (s < 60 ? `${Math.max(1, Math.round(s))}초` : s < 3600 ? `${Math.round(s / 60)}분` : `${Math.floor(s / 3600)}시간 ${Math.round((s % 3600) / 60)}분`);
@@ -87,7 +103,8 @@ function addUsage(chars, secs) {
   if (c.usage?.month !== month) c.usage = { month, chars: 0, secs: 0, usd: 0 };
   c.usage.chars += chars; c.usage.secs += secs;
   const p = priceOf(c.model);
-  if (p) c.usage.usd += (chars * 1.2 * p[0] + secs * 25 * p[1]) / 1e6;
+  if (perChar(c.model)) c.usage.usd += chars * perChar(c.model) / 1e6;
+  else if (p) c.usage.usd += (chars * 1.2 * p[0] + secs * 25 * p[1]) / 1e6;
   // 글자당 걸리는 시간을 실제로 재서 다음 예상을 고친다
   if (chars > 30 && secs > 0) c.spc = Math.min(0.6, Math.max(0.08, c.spc * 0.8 + (secs / chars) * 0.2));
   saveSettings();
@@ -225,6 +242,7 @@ function findAudio(o) {
     if (!x || typeof x !== 'object') return;
     if (Array.isArray(x)) { x.forEach(walk); return; }
     if (x.inlineData?.data || x.inline_data?.data) { const d = x.inlineData || x.inline_data; found = { data: d.data, mime: d.mimeType || d.mime_type || '' }; }
+    else if (typeof x.audioContent === 'string') found = { data: x.audioContent, mime: 'audio/wav' }; // 클라우드 TTS
     else if (x.type === 'audio' && typeof x.data === 'string') found = { data: x.data, mime: x.mime_type || x.mimeType || '' };
     for (const [k, v] of Object.entries(x)) if (k !== 'data' && typeof v === 'object') walk(v);
   };
@@ -286,7 +304,12 @@ async function callOnce(req, key, signal) {
 }
 
 // 글 한 조각 → { wav(Uint8Array), secs, cached }
-export function synth(text, { signal, onWait, c = cfg(), key = getKey() } = {}) {
+export function synth(text, { signal, onWait, c = cfg(), key = keyFor(c) } = {}) {
+  if (isChirp(c.model)) {
+    const two = c.voice2 && c.voice2 !== c.voice;
+    const lines = two ? splitVoices(text).map((x) => ({ spk: x.who === 'C' ? c.voice2 : c.voice, text: x.text })) : [{ spk: c.voice, text }];
+    return chirpSay(lines, { signal, onWait, c, key });
+  }
   const parts = [c.model, c.voice, c.voice2 || '', c.style || '', c.voice2 ? c.style2 || '' : '', text];
   return runSynth(parts, (L) => requestFor(text, c, L), { signal, onWait, c, key, chars: nchars(text) });
 }
@@ -320,6 +343,47 @@ async function runSynth(parts, mk, { signal, onWait, c, key, chars }) {
   }
 }
 
+// ---------- Chirp 3 HD (구글 클라우드 Text-to-Speech) ----------
+// 한 요청에 한 목소리, 5000바이트까지라 문장 단위로 잘라 보낸다
+const CLOUD = 'https://texttospeech.googleapis.com/v1/text:synthesize';
+function chirpPieces(text, max = 1400) {
+  if (text.length <= max) return [text];
+  const out = [];
+  let cur = '';
+  for (const s of text.match(/[^.!?。…\n]+[.!?。…]*[”’"']*\s*|\n+/g) || [text]) {
+    if (cur && cur.length + s.length > max) { out.push(cur); cur = ''; }
+    cur += s.length > max ? '' : s;
+    if (s.length > max) for (let i = 0; i < s.length; i += max) out.push(s.slice(i, i + max));
+  }
+  if (cur.trim()) out.push(cur);
+  return out.filter((x) => x.trim());
+}
+const chirpReq = (text, voice) => ({
+  url: CLOUD,
+  body: { input: { text }, voice: { languageCode: 'ko-KR', name: `ko-KR-Chirp3-HD-${voice}` }, audioConfig: { audioEncoding: 'LINEAR16', sampleRateHertz: RATE } },
+});
+async function chirpSay(lines, { signal, onWait, c, key }) {
+  const pcms = [];
+  let secs = 0, cached = true;
+  for (const l of lines) {
+    for (const t of chirpPieces(l.text.trim())) {
+      let r;
+      try {
+        r = await runSynth(['chirp', c.model, l.spk, t], () => chirpReq(t, l.spk), { signal, onWait, c, key, chars: nchars(t) });
+      } catch (e) {
+        if (e.status === 403) throw new TtsError('Chirp를 쓰려면 구글 클라우드 콘솔에서 이 키의 프로젝트에 ‘Cloud Text-to-Speech API’를 사용 설정해 주세요. (낭독 설정에서 클라우드 키를 따로 넣을 수도 있어요)', { status: 403, fatal: true });
+        throw e;
+      }
+      const p = pcmOf(r.wav);
+      pcms.push(p.pcm); secs += r.secs; cached &&= r.cached;
+    }
+  }
+  const pcm = new Uint8Array(pcms.reduce((a, p) => a + p.length, 0));
+  let o = 0;
+  for (const p of pcms) { pcm.set(p, o); o += p.length; }
+  return { wav: toWav(pcm, RATE), secs, rate: RATE, cached };
+}
+
 // ---------- 인물마다 다른 목소리 ----------
 // AI(글 모델)가 대사마다 누가 말했는지 판정하고, 인물마다 정한 목소리로 읽는다.
 // 등장인물 목록은 작품에 저장한다 (백업·동기화에 함께). 해설은 '해설 목소리', 누군지 모르는 대사는 '대사 목소리'.
@@ -341,14 +405,62 @@ export function autoVoice(gender, cast = castOf(), c = cfg()) {
 let castSaveT;
 const saveCast = () => { clearTimeout(castSaveT); castSaveT = setTimeout(() => S.putProject(app.project).catch(() => {}), 400); };
 const NOBODY = /^(내레이션|해설|서술|내레이터|narrator|모름|알수없음|unknown|none|)$/i;
+const ME = /^(나|저|내|제|본인|화자|서술자)$/;
+
+// ---------- 시점: 1인칭이면 해설(서술)도 화자인 인물의 목소리로 ----------
+export const POVS = [['auto', '자동 (AI가 장마다 판정)'], ['1', '1인칭 — 화자가 등장인물'], ['3', '3인칭·전지적 — 해설 목소리 따로']];
+const chapterText = (id) => (id === app.cur ? app.editor.getText() : htmlParagraphs(app.chapters.get(id)?.html || '').join('\n'));
+const povWait = new Map();
+// → { pov: '1'|'3', narrator: 인물 이름 }
+export async function povOf(chId = app.cur, { signal } = {}) {
+  const cast = castOf();
+  if (cast.pov === '1') return { pov: '1', narrator: cast.narrator || '나' };
+  if (cast.pov === '3') return { pov: '3', narrator: '' };
+  const by = (cast.povBy ||= {});
+  if (by[chId]) return by[chId];
+  if (povWait.has(chId)) return povWait.get(chId);
+  const text = chapterText(chId).slice(0, 6000);
+  if (!text.trim() || aiMissing()) return { pov: '3', narrator: '' };
+  const roster = cast.chars.map((x) => x.name + (x.alias ? ` (${x.alias})` : '')).join(', ') || '(없음)';
+  const prompt = `다음 소설 원고의 서술 시점을 판정하세요.
+- pov: 서술자가 ‘나’·‘저’로 자기 이야기를 하거나 이야기 속에 직접 있는 인물이면 ‘1인칭’(주인공 시점·관찰자 시점 모두), 아니면 ‘3인칭’.
+- narrator: 1인칭이면 서술자 ‘나’가 누구인지. 등장인물 목록에 있으면 그 이름을 그대로, 없으면 원고에서 부르는 이름, 이름이 끝까지 안 나오면 ‘나’. 3인칭이면 빈칸.
+- gender: 서술자의 성별 (여·남·모름).
+등장인물: ${roster}
+
+원고:
+${text}`;
+  const schema = { type: 'OBJECT', properties: { pov: { type: 'STRING', enum: ['1인칭', '3인칭'] }, narrator: { type: 'STRING' }, gender: { type: 'STRING', enum: ['여', '남', '모름'] } }, required: ['pov'] };
+  const p = askJSON(prompt, schema, { signal }).then((r) => {
+    const v = { pov: r.pov === '1인칭' ? '1' : '3', narrator: r.pov === '1인칭' ? String(r.narrator || '나').trim() || '나' : '', gender: r.gender || '모름' };
+    by[chId] = v; saveCast();
+    return v;
+  }).catch((e) => { if (e.name === 'AbortError' || e.fatal) throw e; return { pov: '3', narrator: '' }; })
+    .finally(() => povWait.delete(chId));
+  povWait.set(chId, p);
+  return p;
+}
+// 1인칭 화자를 등장인물에서 찾고, 없으면 넣는다
+function narratorChar(pv, cast, c) {
+  if (pv?.pov !== '1' || !pv.narrator) return null;
+  let ch = charOf(pv.narrator, cast);
+  if (!ch && ME.test(pv.narrator)) ch = cast.chars.find((x) => x.narrator) || null;
+  if (!ch && cast.chars.length < MAX_CAST) {
+    const name = ME.test(pv.narrator) ? '나 (화자)' : pv.narrator;
+    ch = { name, alias: '나', gender: pv.gender || '모름', voice: autoVoice(pv.gender, cast, c), style: '', auto: true, narrator: true };
+    cast.chars.push(ch);
+    saveCast();
+  }
+  return ch;
+}
 
 // 조각 → [{who: ''(해설) | 인물 이름 | '*'(모르는 대사), text}]
-async function attribute(text, { signal, key, c, ctx = '', onWait }) {
+async function attribute(text, { signal, key, c, ctx = '', onWait, nar = null }) {
   const segs = splitVoices(text, true);
   if (!segs.some((x) => x.who === 'C')) return segs.map((x) => ({ who: '', text: x.text }));
   const cast = castOf();
   const roster = cast.chars.map((x) => `${x.name}${x.alias ? ` (다른 호칭: ${x.alias})` : ''}${x.gender && x.gender !== '모름' ? ` [${x.gender}]` : ''}`).join('\n') || '(아직 없음)';
-  const parts = ['attr', aiLabel(), roster, ctx.slice(-500), text];
+  const parts = ['attr', aiLabel(), roster, nar?.name || '', ctx.slice(-500), text];
   const k = await cacheKey(parts);
   const hit = c.cache ? await cacheGet(k) : null;
   let lines = hit?.attr;
@@ -360,7 +472,7 @@ async function attribute(text, { signal, key, c, ctx = '', onWait }) {
 - 아래 '등장인물'에 있는 인물이면 그 이름을 그대로 쓰세요. 다른 호칭으로 불려도 같은 인물이면 목록의 이름으로 답하세요.
 - 목록에 없는 인물이면 원고에서 부르는 이름을 쓰고, 이름이 없으면 ‘노인’, ‘점원’처럼 짧게 부르세요. 성별도 적으세요.
 - 생각·속말·인용처럼 아무도 소리 내어 말하지 않은 것이면 speaker를 ‘해설’로 답하세요.
-
+${nar ? `- 이 원고는 1인칭 시점이고 서술자 ‘나’는 ${nar.name}입니다. ‘나’가 소리 내어 한 말은 speaker를 ‘${nar.name}’로 답하세요.\n` : ''}
 등장인물:
 ${roster}
 
@@ -385,7 +497,7 @@ ${marked}`;
   for (const l of lines) {
     const name = String(l.speaker || '').trim();
     if (NOBODY.test(name.replace(/\s/g, ''))) { byQ.set(l.q, ''); continue; }
-    let ch = charOf(name, cast);
+    let ch = nar && ME.test(name.replace(/\s/g, '')) ? nar : charOf(name, cast);
     if (!ch && cast.chars.length < MAX_CAST) {
       ch = { name, alias: '', gender: l.gender || '모름', voice: autoVoice(l.gender, cast, c), style: '', auto: true };
       cast.chars.push(ch);
@@ -431,17 +543,26 @@ function requestGroup(lines, c, useLegacy) {
   };
 }
 
-async function castSynth(text, { signal, onWait, c = cfg(), key = getKey(), ctx = '' } = {}) {
+async function castSynth(text, { signal, onWait, c = cfg(), key = keyFor(c), ctx = '', chapter = app.cur } = {}) {
   if (!key) throw new TtsError('Gemini API 키를 먼저 넣어 주세요.', { fatal: true, status: -1 });
   const miss = aiMissing();
   if (miss) throw new TtsError('대사 판정: ' + miss, { fatal: true, status: -1 });
-  const segs = await attribute(text, { signal, key, c, ctx, onWait });
   const cast = castOf();
+  // 1인칭이면 서술(해설)도 화자인 인물의 목소리로 읽는다: 해설과 ‘나’의 대사가 같은 사람 목소리
+  const nar = narratorChar(await povOf(chapter, { signal }), cast, c);
+  const segs = await attribute(text, { signal, key, c, ctx, onWait, nar });
+  const narStyle = nar ? [c.style, `1인칭 화자(${nar.name})가 자기 이야기를 들려주듯`, nar.style].filter(Boolean).join(' / ') : c.style;
   const pick = (who) => {
-    if (!who) return { voice: c.voice, style: c.style };
+    if (!who) return nar ? { voice: nar.voice, style: narStyle } : { voice: c.voice, style: c.style };
     const ch = who === '*' ? null : charOf(who, cast);
     return { voice: ch?.voice || c.voice2 || c.voice, style: ch?.style || c.style2 || c.style };
   };
+  if (isChirp(c.model)) {
+    // Chirp는 한 요청에 목소리 하나: 같은 목소리가 이어지는 줄끼리 묶어 차례로 만든다
+    const lines = [];
+    for (const x of segs) { const { voice } = pick(x.who); const last = lines.at(-1); if (last && last.spk === voice) last.text += ' ' + x.text; else lines.push({ spk: voice, text: x.text }); }
+    return chirpSay(lines, { signal, onWait, c, key });
+  }
   // 목소리가 두 개를 넘으면 요청을 나눈다. 같은 목소리가 이어지면 한 줄로 합친다
   const groups = [];
   let g = null;
@@ -488,6 +609,37 @@ ${text.slice(0, 300000)}`;
   return ((await askJSON(prompt, schema, { signal })).chars || []).filter((x) => x.name && !NOBODY.test(x.name.replace(/\s/g, '')));
 }
 
+// 작품 전체를 읽고 인물마다 어울리는 목소리와 연기 지시(목소리 설계)를 정한다. 시점·화자·해설 분위기도 함께.
+export async function designCast(text, { signal } = {}) {
+  const miss = aiMissing();
+  if (miss) throw new TtsError(miss, { fatal: true });
+  const voices = VOICES.map(([n, d, g]) => `${n} (${g}, ${d})`).join(', ');
+  const prompt = `당신은 오디오북 캐스팅 감독입니다. 아래 소설 원고 전체를 읽고, 낭독에 쓸 목소리를 설계하세요.
+1) 작품: 장르와 분위기를 파악하세요. pov는 서술자가 ‘나’로 이야기 속에 있으면 ‘1인칭’(주인공·관찰자 모두), 아니면 ‘3인칭’. 1인칭이면 narrator에 서술자 ‘나’의 이름(이름이 안 나오면 ‘나’).
+2) 해설: narrationVoice는 아래 목소리 중 작품 분위기에 가장 맞는 하나. narrationStyle은 해설을 읽는 연기 지시(빠르기·톤·감정·쉼, 80~160자). 1인칭이면 화자가 자기 이야기를 하는 느낌으로.
+3) 등장인물: 대사를 하는 인물을 많이 말하는 순서로 최대 ${MAX_CAST}명. 인물마다
+ - name(원고에서 가장 자주 부르는 이름), alias(다른 호칭, 쉼표로), gender(여·남·모름)
+ - voice: 아래 목소리 중 그 인물의 나이·성격·성별에 가장 맞는 것. 인물끼리, 그리고 해설과 되도록 겹치지 않게.
+ - style: 그 인물의 목소리를 만드는 연기 지시. 나이대, 음색(허스키·맑음 등), 높낮이, 말 빠르기, 말투·사투리, 버릇, 이 작품에서 주로 드러나는 감정을 구체적으로 (60~160자). 인물의 이름이나 줄거리는 넣지 말고 소리만 설명하세요.
+목소리 목록: ${voices}
+
+원고:
+${text.slice(0, 400000)}`;
+  const names = VOICES.map((v) => v[0]);
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      genre: { type: 'STRING' }, pov: { type: 'STRING', enum: ['1인칭', '3인칭'] }, narrator: { type: 'STRING' },
+      narrationVoice: { type: 'STRING', enum: names }, narrationStyle: { type: 'STRING' },
+      chars: { type: 'ARRAY', items: { type: 'OBJECT', properties: { name: { type: 'STRING' }, alias: { type: 'STRING' }, gender: { type: 'STRING', enum: ['여', '남', '모름'] }, voice: { type: 'STRING', enum: names }, style: { type: 'STRING' } }, required: ['name', 'voice', 'style'] } },
+    },
+    required: ['pov', 'narrationVoice', 'narrationStyle', 'chars'],
+  };
+  const r = await askJSON(prompt, schema, { signal });
+  r.chars = (r.chars || []).filter((x) => x.name && !NOBODY.test(x.name.replace(/\s/g, '')));
+  return r;
+}
+
 // ---------- 원고 → 조각 ----------
 const BREAK = /^[\s*·•◇◆#~—\-=＊]+$/;
 // 지금 장의 문단 목록 [{from, to, text, brk}] (장면 전환·구분선은 brk: 소리 없이 쉰다)
@@ -529,7 +681,7 @@ function chunksOf(paras, size) {
 // ---------- 재생기 ----------
 const P = {
   on: false, paused: false, i: 0, chunks: [], jobs: new Map(), ctrl: null, token: 0, chapter: null,
-  audio: null, url: null, engine: 'gemini', lastTyping: 0, onlySel: false, cur: null,
+  audio: null, url: null, engine: 'gemini', lastTyping: 0, userScroll: 0, onlySel: false, cur: null,
 };
 const audio = () => (P.audio ||= Object.assign(new Audio(), { preservesPitch: true }));
 
@@ -540,7 +692,7 @@ function job(i) {
   const c = cfg();
   const p = ch.brk
     ? Promise.resolve({ wav: toWav(silence(c.breakPause)), secs: c.breakPause, brk: true })
-    : speak(ch.text, { ctx: P.chunks[i - 1]?.text || '', signal: P.ctrl.signal, onWait: (e, ms) => i === P.i && status(`${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도할게요…`) });
+    : speak(ch.text, { ctx: P.chunks[i - 1]?.text || '', chapter: P.chapter, signal: P.ctrl.signal, onWait: (e, ms) => i === P.i && status(`${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도할게요…`) });
   p.catch(() => {}); // 처리는 재생할 때
   P.jobs.set(i, p);
   return p;
@@ -580,18 +732,61 @@ function mark(p) {
   const view = app.editor?.view;
   if (!view || (p && (P.cur === p || app.cur !== P.chapter))) return;
   P.cur = p;
-  try { view.dispatch(view.state.tr.setMeta(readKey, p ? { from: p.from } : null).setMeta('addToHistory', false)); } catch { return; }
-  if (!p || !cfg().follow || Date.now() - P.lastTyping < 4000) return;
-  let el = null;
-  try { el = view.nodeDOM(p.from); } catch { /* 위치가 바뀌었으면 건너뛴다 */ }
-  if (el instanceof HTMLElement) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  try { view.dispatch(view.state.tr.setMeta(readKey, p ? { from: p.from } : null).setMeta('addToHistory', false)); } catch { /* 위치가 바뀌었으면 건너뛴다 */ }
 }
-// 조각 안에서 지금 몇 번째 문단인지 (글자 수 비율로 짐작)
+// 조각 안에서 지금 몇 번째 문단의 어디쯤인지 (글자 수 비율로 짐작, 문단 사이 쉼도 조금 넣는다)
 function paraAt(ch, frac) {
-  const lens = ch.paras.map((p) => p.text.length || 1), sum = lens.reduce((a, b) => a + b, 0);
+  const lens = ch.paras.map((p) => (p.text.length || 1) + 6), sum = lens.reduce((a, b) => a + b, 0);
   let acc = 0;
-  for (let k = 0; k < lens.length; k++) { acc += lens[k]; if (frac * sum < acc) return ch.paras[k]; }
-  return ch.paras.at(-1);
+  for (let k = 0; k < lens.length; k++) {
+    if (frac * sum < acc + lens[k]) return { p: ch.paras[k], in: Math.max(0, Math.min(1, (frac * sum - acc) / lens[k])) };
+    acc += lens[k];
+  }
+  return { p: ch.paras.at(-1), in: 1 };
+}
+
+// 화면 따라가기: 읽는 자리를 화면 위쪽 40% 높이에 두도록 매 프레임 조금씩 다가간다.
+// 빠르기에 맞춰 더 빨리 따라가고(1.1배 이상에서 늦게 따라오던 문제), 긴 문단은 읽는 만큼 조금씩 내려간다.
+// 손으로 스크롤하거나 글을 고치는 동안에는 잠시 멈춘다.
+const LEAD = 0.25; // 초: 목소리보다 조금 먼저 움직여 눈이 따라오기 쉽게
+let followRaf = 0, followLast = 0;
+function scrollerOf(el) {
+  for (let n = el?.parentElement; n; n = n.parentElement) {
+    const o = getComputedStyle(n).overflowY;
+    if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+  }
+  return document.scrollingElement;
+}
+function follow(where, now) {
+  const view = app.editor?.view;
+  const dt = Math.min(100, now - (followLast || now)); followLast = now;
+  if (!where || !view || !cfg().follow || app.cur !== P.chapter) return;
+  if (Date.now() - P.lastTyping < 4000 || Date.now() - P.userScroll < 3000) return;
+  let el = null;
+  try { el = view.nodeDOM(where.p.from); } catch { return; }
+  if (!(el instanceof HTMLElement)) return;
+  const sc = scrollerOf(el);
+  const r = el.getBoundingClientRect();
+  const top = sc === document.scrollingElement ? 0 : sc.getBoundingClientRect().top;
+  const h = sc === document.scrollingElement ? innerHeight : sc.clientHeight;
+  // 짧은 문단은 가운데쯤, 화면보다 긴 문단은 읽는 줄이 40% 높이에 오게
+  const y = r.height < h * 0.5 ? r.top + r.height / 2 : r.top + r.height * where.in;
+  const diff = y - (top + h * 0.4);
+  if (Math.abs(diff) < 4) return;
+  const rate = +cfg().rate || 1;
+  const k = Math.min(1, (dt / 1000) * 5 * Math.max(1, rate)); // 1초에 남은 거리의 약 5배 속도로 (빠르기에 비례)
+  sc.scrollTop += Math.abs(diff) > h * 2 ? diff : diff * k; // 너무 멀면 한 번에
+}
+function track(tok, prog) {
+  cancelAnimationFrame(followRaf);
+  followLast = 0;
+  const step = (now) => {
+    if (tok !== P.token || !P.on) return;
+    const w = prog();
+    if (w) { mark(w.p); if (!P.paused) follow(w, now); }
+    followRaf = requestAnimationFrame(step);
+  };
+  followRaf = requestAnimationFrame(step);
 }
 
 async function playAt(i) {
@@ -601,6 +796,7 @@ async function playAt(i) {
   if (i >= P.chunks.length) { await finished(); return; }
   const ch = P.chunks[i];
   mark(ch.paras[0]);
+  track(tok, () => ({ p: ch.paras[0], in: 0 })); // 음성을 기다리는 동안에도 읽을 자리로 화면을 옮긴다
   if (P.engine === 'browser') { browserSay(ch, tok); return; }
   job(i);
   prefetch(i);
@@ -620,7 +816,7 @@ async function playAt(i) {
   if (P.url) URL.revokeObjectURL(P.url);
   P.url = URL.createObjectURL(new Blob([r.wav], { type: 'audio/wav' }));
   a.src = P.url;
-  a.playbackRate = +cfg().rate || 1;
+  a.defaultPlaybackRate = a.playbackRate = +cfg().rate || 1;
   a.onended = () => {
     if (tok !== P.token) return;
     P.jobs.delete(i); // 지난 조각은 메모리에서 뺀다 (캐시에는 남아 있다)
@@ -628,7 +824,8 @@ async function playAt(i) {
     if (gap) sleep(gap * 1000 / (+cfg().rate || 1), P.ctrl.signal).then(() => tok === P.token && playAt(i + 1), () => {});
     else playAt(i + 1);
   };
-  a.ontimeupdate = () => { if (tok === P.token && a.duration) mark(paraAt(ch, a.currentTime / a.duration)); };
+  // timeupdate는 1초에 몇 번뿐이라 매 프레임 재생 위치를 읽는다
+  track(tok, () => (a.duration ? paraAt(ch, Math.min(1, (a.currentTime + LEAD * a.playbackRate) / a.duration)) : { p: ch.paras[0], in: 0 }));
   status(ch.brk ? '장면 전환' : `읽는 중${r.cached ? ' (저장해 둔 음성)' : ''}`);
   try {
     if (!P.paused) await a.play();
@@ -656,7 +853,9 @@ async function browserSay(ch, tok) {
   const kos = speechSynthesis.getVoices().filter((v) => v.lang?.startsWith('ko'));
   const ko = kos.find((v) => v.localService) || kos[0];
   if (ko) u.voice = ko;
-  u.onboundary = (e) => { if (tok === P.token) mark(paraAt(ch, e.charIndex / ch.text.length)); };
+  let at = { p: ch.paras[0], in: 0 };
+  u.onboundary = (e) => { if (tok === P.token) at = paraAt(ch, e.charIndex / ch.text.length); };
+  track(tok, () => at);
   u.onend = () => { if (tok === P.token && !P.paused) playAt(P.i + 1); };
   u.onerror = (e) => { if (tok === P.token && e.error !== 'interrupted' && e.error !== 'canceled') { stop(); toast('기기 목소리로 읽지 못했어요.'); } };
   status('읽는 중 (기기 목소리)');
@@ -691,10 +890,11 @@ function media() {
 }
 
 // 읽기 시작: 고른 글이 있으면 그 부분만, 없으면 커서가 있는 문단부터 장 끝까지 (from=0이면 장 처음부터)
-function begin(fromPos, { keepOpen = false } = {}) {
+function begin(fromPos, { keepOpen = false, range = null } = {}) {
   const ed = app.editor;
   const c = cfg();
-  const { from, to, empty } = ed.state.selection;
+  let { from, to, empty } = ed.state.selection;
+  if (range) { [from, to] = range; empty = false; fromPos = null; }
   P.onlySel = !keepOpen && !empty && fromPos == null;
   // 고른 부분만 읽을 때는 문단 안에서 고른 글자만, 아니면 커서가 있는 문단의 처음부터
   let paras = P.onlySel ? paragraphs(ed.state.doc, from, to, true) : paragraphs(ed.state.doc, fromPos ?? from);
@@ -708,8 +908,8 @@ function begin(fromPos, { keepOpen = false } = {}) {
   P.ctrl?.abort();
   P.ctrl = new AbortController();
   P.jobs.clear();
-  P.engine = c.engine === 'gemini' && getKey() ? 'gemini' : 'browser';
-  if (c.engine === 'gemini' && !getKey() && !keepOpen) toast('Gemini 키가 없어 기기 목소리로 읽어요. 도구 › 낭독 설정에서 키를 넣을 수 있어요.', 6000);
+  P.engine = c.engine === 'gemini' && keyFor(c) ? 'gemini' : 'browser';
+  if (c.engine === 'gemini' && !keyFor(c) && !keepOpen) toast('Gemini 키가 없어 기기 목소리로 읽어요. 도구 › 낭독 설정에서 키를 넣을 수 있어요.', 6000);
   P.chunks = chunksOf(list, Math.max(200, Math.min(3000, +c.chunk || 700)));
   P.chapter = app.cur;
   P.on = true; P.paused = false; P.cur = undefined;
@@ -721,6 +921,37 @@ export function readAloud() {
   begin();
 }
 export function readFromHere(pos) { if (P.on) stop(); begin(pos ?? app.editor.state.selection.from); }
+// 커서가 있는 문장 하나만 (고른 글이 있으면 그 부분만)
+export function sentenceRange(state = app.editor.state) {
+  const { $from, empty, from, to } = state.selection;
+  if (!empty) return [from, to];
+  const para = $from.parent;
+  if (!para.isTextblock || !para.textContent.trim()) return null;
+  const text = para.textContent, off = $from.parentOffset, start = $from.start();
+  const re = /[^.!?。…]*[.!?。…]+[”’"'」』)]*\s*|[^.!?。…]+$/g;
+  let m;
+  while ((m = re.exec(text))) {
+    if (!m[0]) { re.lastIndex++; continue; }
+    const a = m.index, b = m.index + m[0].length;
+    if (off < b || b >= text.length) {
+      const lead = m[0].length - m[0].trimStart().length;
+      return [start + a + lead, start + a + m[0].trimEnd().length];
+    }
+  }
+  return [start, start + text.length];
+}
+export function readSentence() {
+  if (P.on) stop();
+  const r = sentenceRange();
+  if (!r) { toast('커서를 문장 안에 두고 다시 눌러 주세요.'); return; }
+  begin(null, { range: r });
+}
+export function readParagraph() {
+  if (P.on) stop();
+  const { $from } = app.editor.state.selection;
+  if (!$from.parent.isTextblock || !$from.parent.textContent.trim()) { toast('커서를 문단 안에 두고 다시 눌러 주세요.'); return; }
+  begin(null, { range: [$from.start(), $from.end()] });
+}
 export function readChapter() { if (P.on) stop(); begin(0); }
 export function toggle() {
   if (!P.on) { readAloud(); return; }
@@ -748,10 +979,28 @@ export function stop() {
   if (P.audio) { P.audio.pause(); P.audio.removeAttribute('src'); P.audio.load(); }
   if (P.url) { URL.revokeObjectURL(P.url); P.url = null; }
   if ('speechSynthesis' in window) speechSynthesis.cancel();
+  cancelAnimationFrame(followRaf);
   mark(null);
   bar();
 }
 export const isReading = () => P.on;
+
+// 읽는 중에 다른 문단으로 옮기기: 그 문단부터 이어 읽는다 (조각 첫 문단이면 만들어 둔 음성을 그대로 쓴다)
+export function jumpTo(pos) {
+  if (!P.on || app.cur !== P.chapter) return false;
+  const doc = app.editor.state.doc;
+  const $p = doc.resolve(Math.max(0, Math.min(pos, doc.content.size)));
+  let start = pos;
+  for (let d = $p.depth; d > 0; d--) if ($p.node(d).isTextblock) { start = $p.before(d); break; }
+  const i = P.onlySel ? -1 : P.chunks.findIndex((ch) => ch.paras[0] && !ch.brk && ch.paras[0].from === start);
+  if (P.engine === 'browser') speechSynthesis.cancel(); else P.audio?.pause();
+  P.paused = false;
+  if (i >= 0) { playAt(i); return true; }
+  const wasSel = P.onlySel;
+  begin(start, { keepOpen: false });
+  if (wasSel) toast('고른 부분 대신 이 문단부터 끝까지 읽어요.', 2500);
+  return true;
+}
 
 // 읽는 동안 원고를 고치면 문단 위치를 따라 옮긴다
 function mapPositions(tr) {
@@ -767,7 +1016,7 @@ function mapPositions(tr) {
 
 // ---------- 음성 파일로 저장 ----------
 export async function exportAudio() {
-  if (!getKey()) { toast('음성 파일은 Gemini 목소리로만 만들 수 있어요. 낭독 설정에서 키를 넣어 주세요.', 6000); showReaderSettings(); return; }
+  if (!keyFor()) { toast('음성 파일은 Gemini 목소리로만 만들 수 있어요. 낭독 설정에서 키를 넣어 주세요.', 6000); showReaderSettings(); return; }
   const ed = app.editor, c = cfg();
   const { from, to, empty } = ed.state.selection;
   const r0 = await dialog({
@@ -793,8 +1042,8 @@ export async function exportAudio() {
   const list = rangeText(range, { from, to });
   const chunks = [];
   for (const sec of list) {
-    if (sec.title) chunks.push({ text: sec.title, title: true }, { brk: true });
-    for (const ch of chunksOf(sec.paras, Math.max(200, Math.min(3000, +c.chunk || 700)))) chunks.push(ch);
+    if (sec.title) chunks.push({ text: sec.title, title: true, chId: sec.chId }, { brk: true });
+    for (const ch of chunksOf(sec.paras, Math.max(200, Math.min(3000, +c.chunk || 700)))) chunks.push({ ...ch, chId: sec.chId });
     chunks.push({ brk: true });
   }
   const ctrl = new AbortController();
@@ -813,7 +1062,7 @@ export async function exportAudio() {
       else {
         const ctx = prev;
         prev = ch.text;
-        const r = await speak(ch.text, { ctx, signal: ctrl.signal, onWait: (e, ms) => { const m = $('#axMsg'); if (m) m.textContent = `${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도…`; } });
+        const r = await speak(ch.text, { ctx, chapter: ch.chId, signal: ctrl.signal, onWait: (e, ms) => { const m = $('#axMsg'); if (m) m.textContent = `${e.message} ${Math.ceil(ms / 1000)}초 뒤 다시 시도…`; } });
         pcms.push(pcmOf(r.wav).pcm, silence(c.gap));
       }
       done++;
@@ -842,15 +1091,15 @@ function rangeText(range, { from, to }) {
   const ed = app.editor;
   if (range === 'sel') {
     const ps = paragraphs(ed.state.doc, from, to, true);
-    return [{ paras: ps.filter((p) => p.brk || p.text), text: ps.map((p) => p.text).join('\n') }];
+    return [{ chId: app.cur, paras: ps.filter((p) => p.brk || p.text), text: ps.map((p) => p.text).join('\n') }];
   }
-  if (range === 'ch') { const ps = paragraphs(ed.state.doc); return [{ paras: ps, text: ps.map((p) => p.text).join('\n') }]; }
+  if (range === 'ch') { const ps = paragraphs(ed.state.doc); return [{ chId: app.cur, paras: ps, text: ps.map((p) => p.text).join('\n') }]; }
   const out = [];
   for (const id of app.project.order) {
     const ch = app.chapters.get(id);
     const html = id === app.cur ? null : ch?.html || '';
     const ps = html == null ? paragraphs(ed.state.doc) : paragraphsOfHtml(html);
-    out.push({ title: ch?.title || '', paras: ps, text: (ch?.title || '') + '\n' + ps.map((p) => p.text).join('\n') });
+    out.push({ chId: id, title: ch?.title || '', paras: ps, text: (ch?.title || '') + '\n' + ps.map((p) => p.text).join('\n') });
   }
   return out;
 }
@@ -875,7 +1124,10 @@ export async function showReaderSettings() {
   const opt = (v, l, sel) => `<option value="${h(v)}" ${v === sel ? 'selected' : ''}>${h(l)}</option>`;
   const voiceOpts = (sel, none) => (none ? opt('', none, sel) : '') +
     ['여', '남'].map((g) => `<optgroup label="${g === '여' ? '여성 목소리' : '남성 목소리'}">${VOICES.filter((v) => v[2] === g).map(([n, d]) => opt(n, `${n} · ${d}`, sel)).join('')}</optgroup>`).join('');
-  const known = MODELS.some((m) => m.id === c.model);
+  const mine = (c.myModels || []).filter((id) => !MODELS.some((m) => m.id === id));
+  const known = MODELS.some((m) => m.id === c.model) || mine.includes(c.model);
+  const modelOpts = (sel) => MODELS.map((m) => opt(m.id, m.label + (m.hint ? ` — ${m.hint}` : ''), sel)).join('') +
+    (mine.length ? `<optgroup label="불러오거나 직접 넣은 모델">${mine.map((id) => opt(id, id, sel)).join('')}</optgroup>` : '') + opt('custom', '직접 입력…', known ? '' : 'custom');
   const { n, b } = await cacheSize();
   const u = c.usage?.month === new Date().toISOString().slice(0, 7) ? c.usage : null;
   const r = await dialog({
@@ -898,14 +1150,20 @@ export async function showReaderSettings() {
         </div>
         <label class="check"><input type="checkbox" name="remember" ${!key || keyRemembered() ? 'checked' : ''}> 이 기기에 키 기억하기 <small>끄면 이 창을 닫을 때까지만 씁니다</small></label>
         <p class="hint" style="margin:0">키는 이 기기에만 저장되고 백업 파일·드라이브 동기화에는 들어가지 않습니다. 구글로 보낼 때도 주소가 아닌 머리글에 담아 보냅니다.</p>
+        <details class="rd-cloud" ${isChirp(c.model) ? 'open' : ''}><summary>Chirp 3 HD용 구글 클라우드 키 <small>(Chirp 모델을 고를 때만 · 비우면 위 키를 써요)</small></summary>
+          <p class="hint" style="margin:0">Chirp 3 HD는 구글 클라우드의 Text-to-Speech API로 읽어요. <a href="https://console.cloud.google.com/apis/library/texttospeech.googleapis.com" target="_blank" rel="noopener">클라우드 콘솔</a>에서 키의 프로젝트에 ‘Cloud Text-to-Speech API’를 사용 설정하면 위 Gemini 키로도 돼요. 다른 프로젝트 키를 쓰려면 여기에 넣으세요.</p>
+          <div class="rd-key"><input name="cloudKey" type="password" autocomplete="off" spellcheck="false" placeholder="${cloudKey() ? h(maskKey(cloudKey())) + ' (저장됨)' : '구글 클라우드 API 키 (선택)'}" aria-label="구글 클라우드 API 키">${cloudKey() ? '<button type="button" class="small danger" data-x="forgetCloud">지우기</button>' : ''}</div>
+        </details>
         <p id="rdTest" class="hint" style="margin:0" aria-live="polite"></p>
       </section>
       <section class="rd-gem">
         <h3>모델과 목소리</h3>
         <div class="row2">
-          <label class="field"><span>모델</span><select name="model">${MODELS.map((m) => opt(m.id, m.label + (m.hint ? ` — ${m.hint}` : ''), c.model)).join('')}${opt('custom', '직접 입력…', known ? '' : 'custom')}</select></label>
-          <label class="field rd-custom" ${known ? 'hidden' : ''}><span>모델 이름</span><input name="modelId" value="${known ? '' : h(c.model)}" placeholder="gemini-…-tts" spellcheck="false"></label>
+          <label class="field"><span>모델</span><select name="model">${modelOpts(c.model)}</select></label>
+          <label class="field rd-custom" ${known ? 'hidden' : ''}><span>모델 이름 <small>(AI Studio에 나오는 이름 그대로, 예: 새로 나온 TTS·튜닝한 모델)</small></span><input name="modelId" value="${known ? '' : h(c.model)}" placeholder="gemini-…-tts" spellcheck="false" list="rdModelList"></label>
         </div>
+        <div class="rd-cast"><button type="button" class="small" data-x="models">내 키로 쓸 수 있는 TTS 모델 불러오기</button><span id="rdModels" class="hint" aria-live="polite"></span></div>
+        <datalist id="rdModelList">${mine.map((id) => `<option value="${h(id)}">`).join('')}</datalist>
         <div class="row2">
           <label class="field"><span>해설 목소리</span><span class="rd-voice"><select name="voice">${voiceOpts(c.voice)}</select><button type="button" class="small" data-x="pv1" title="미리 듣기">▶ 듣기</button></span></label>
           <label class="field"><span>대사 목소리 (따옴표 안)</span><span class="rd-voice"><select name="voice2">${voiceOpts(c.voice2, '해설과 같은 목소리')}</select><button type="button" class="small" data-x="pv2" title="미리 듣기">▶ 듣기</button></span></label>
@@ -942,14 +1200,17 @@ export async function showReaderSettings() {
     buttons: [{ label: '취소', value: 'close' }, { label: '등장인물', value: 'cast' }, { label: '저장하고 여기부터 읽기', value: 'read' }, { label: '저장', value: 'ok', primary: true }],
     onOpen: (f) => {
       f.querySelector('.dlg-foot button[value=cast]').hidden = true;
-      const keyNow = () => f.key.value.trim() || getKey();
+      const keyNow = () => (isChirp(f.model.value === 'custom' ? f.modelId.value : f.model.value) ? f.cloudKey.value.trim() || cloudKey() : '') || f.key.value.trim() || getKey();
       const draft = () => ({
         ...c, model: f.model.value === 'custom' ? f.modelId.value.trim() : f.model.value, voice: f.voice.value, voice2: f.voice2.value,
         style: f.styleTxt.value.trim(), style2: f.style2.value.trim(), cache: f.cache.checked,
       });
       const engine = () => f.querySelectorAll('.rd-gem').forEach((e) => e.classList.toggle('off', f.engine.value !== 'gemini'));
       f.querySelectorAll('[name=engine]').forEach((x) => x.addEventListener('change', engine)); engine();
-      f.model.addEventListener('change', () => { f.querySelector('.rd-custom').hidden = f.model.value !== 'custom'; if (f.model.value === 'custom') f.modelId.focus(); });
+      f.model.addEventListener('change', () => {
+        f.querySelector('.rd-custom').hidden = f.model.value !== 'custom'; if (f.model.value === 'custom') f.modelId.focus();
+        if (isChirp(f.model.value)) { f.querySelector('.rd-cloud').open = true; out.textContent = 'Chirp 3 HD는 연기 지시(분위기)를 쓰지 않고 목소리만 바꿔 읽어요.'; }
+      });
       f.voice2.addEventListener('change', () => { f.querySelector('.rd-s2').hidden = !f.voice2.value; });
       f.querySelectorAll('[name=styleId]').forEach((x) => x.addEventListener('change', () => {
         const s = STYLES.find((y) => y[0] === x.value);
@@ -986,9 +1247,28 @@ export async function showReaderSettings() {
         else if (x === 'test') say('안녕하세요. 연결이 잘 되었어요.', 'voice', '연결 시험');
         else if (x === 'pv1') say(f.sample.value.trim() || sampleText(), 'voice', '해설 목소리');
         else if (x === 'pv2') say(f.sample.value.trim() || sampleText(), 'voice2', '대사 목소리');
+        else if (x === 'forgetCloud') { setCloudKey(''); e.target.remove(); out.textContent = '클라우드 키를 지웠어요.'; }
         else if (x === 'forget') { setKey(''); f.key.placeholder = 'AI Studio에서 받은 키'; e.target.remove(); out.textContent = '키를 지웠어요.'; }
         else if (x === 'clear') { await cacheClear(); e.target.disabled = true; out.textContent = '저장해 둔 음성을 비웠어요.'; }
         else if (x === 'cast') f.requestSubmit(f.querySelector('.dlg-foot button[value=cast]'));
+        else if (x === 'models') {
+          const m = $('#rdModels');
+          const k = keyNow();
+          if (!k) { m.textContent = '먼저 API 키를 넣어 주세요.'; f.key.focus(); return; }
+          m.textContent = '불러오는 중…';
+          try {
+            const got = await ttsModels(k);
+            const fresh = got.filter((id) => !MODELS.some((x) => x.id === id));
+            c.myModels = [...new Set([...(c.myModels || []), ...fresh])];
+            saveSettings();
+            const cur = f.model.value;
+            f.model.innerHTML = MODELS.map((x) => opt(x.id, x.label + (x.hint ? ` — ${x.hint}` : ''), cur)).join('') +
+              (c.myModels.length ? `<optgroup label="불러오거나 직접 넣은 모델">${c.myModels.filter((id) => !MODELS.some((x) => x.id === id)).map((id) => opt(id, id, cur)).join('')}</optgroup>` : '') + opt('custom', '직접 입력…', cur);
+            f.model.value = cur;
+            $('#rdModelList').innerHTML = c.myModels.map((id) => `<option value="${h(id)}">`).join('');
+            m.textContent = got.length ? `TTS 모델 ${got.length}개를 찾았어요${fresh.length ? ` (목록에 없던 ${fresh.length}개를 더함)` : ''}. 모델 칸에서 고르세요.` : '이 키로 쓸 수 있는 TTS 모델을 찾지 못했어요.';
+          } catch (err) { m.textContent = '✕ ' + err.message; }
+        }
       });
       f.key.addEventListener('input', () => {
         const v = f.key.value.trim();
@@ -1001,9 +1281,12 @@ export async function showReaderSettings() {
   if (r.value !== 'ok' && r.value !== 'read' && r.value !== 'cast') return;
   const f = r.form;
   const newKey = f.key.value.trim();
+  if (f.cloudKey.value.trim()) setCloudKey(f.cloudKey.value.trim());
   if (newKey) setKey(newKey, f.remember.checked);
   else if (getKey()) setKey(getKey(), f.remember.checked);
   const model = f.model.value === 'custom' ? f.modelId.value.trim() || DEF.model : f.model.value;
+  // 직접 넣은 모델은 다음에도 고를 수 있게 남긴다
+  if (f.model.value === 'custom' && f.modelId.value.trim() && !MODELS.some((m) => m.id === model)) c.myModels = [...new Set([...(c.myModels || []), model])];
   Object.assign(c, {
     engine: f.engine.value, model, voice: f.voice.value, voice2: f.voice2.value, styleId: f.styleId.value,
     style: f.styleTxt.value.trim(), style2: f.style2.value.trim(), rate: +f.rate.value || 1, gap: +f.gap.value, breakPause: +f.breakPause.value,
@@ -1012,7 +1295,7 @@ export async function showReaderSettings() {
   });
   saveSettings();
   if (r.value === 'cast') { showCast({ back: true }); return; }
-  if (c.engine === 'gemini' && !getKey()) toast('키가 없으면 기기 목소리로 읽어요.', 4000);
+  if (c.engine === 'gemini' && !keyFor(c)) toast('키가 없으면 기기 목소리로 읽어요.', 4000);
   if (P.on) { const i = P.i; stop(); begin(P.chunks[i]?.paras[0]?.from ?? 0); }
   else if (r.value === 'read') readAloud();
   else toast('낭독 설정을 저장했어요.', 1800);
@@ -1041,9 +1324,16 @@ export async function showCast({ back = false } = {}) {
         <label class="field"><span>해설(내레이션) 목소리</span><span class="rd-voice"><select name="nv">${voiceOptions(c.voice)}</select><button type="button" class="small" data-c="pvn" title="미리 듣기">▶</button></span></label>
         <label class="field"><span>누군지 모르는 대사</span><select name="dv">${voiceOptions(c.voice2, '해설과 같은 목소리')}</select></label>
       </div>
+      <div class="row2">
+        <label class="field"><span>소설의 시점</span><select name="pov">${POVS.map(([v, l]) => optH(v, l, cast.pov || 'auto')).join('')}</select></label>
+        <label class="field cast-nar"><span>화자 ‘나’ <small>(1인칭일 때 해설도 이 인물 목소리로)</small></span><input name="narrator" value="${h(cast.narrator || '')}" placeholder="예: 민준 · 비우면 ‘나’" list="castNames"></label>
+      </div>
+      <p class="hint" id="povNow" style="margin:0"></p>
+      <datalist id="castNames"></datalist>
+      <input type="hidden" name="nstyle" value="">
       <section>
         <h3>등장인물 <small id="castN"></small></h3>
-        <div class="cast-find"><button type="button" class="small" data-c="find" data-scope="ch">AI로 이 장에서 인물 찾기</button><button type="button" class="small" data-c="find" data-scope="all">작품 전체에서 찾기</button><button type="button" class="small" data-c="add">+ 직접 추가</button><span id="castMsg" class="hint" aria-live="polite"></span></div>
+        <div class="cast-find"><button type="button" class="small primary" data-c="design" title="작품 전체를 읽고 인물마다 어울리는 목소리·연기 지시를 정해요">AI가 작품 전체를 읽고 목소리·연기 정하기</button><button type="button" class="small" data-c="find" data-scope="ch">AI로 이 장에서 인물 찾기</button><button type="button" class="small" data-c="find" data-scope="all">작품 전체에서 찾기</button><button type="button" class="small" data-c="add">+ 직접 추가</button><span id="castMsg" class="hint" aria-live="polite"></span></div>
         <div class="cast-head" aria-hidden="true"><span>이름</span><span>다른 호칭</span><span>성별</span><span>목소리</span><span>연기 지시</span><span></span></div>
         <div id="castList" class="cast-list"></div>
         <p class="hint" style="margin:0">읽다가 목록에 없는 인물이 나오면 AI가 알아서 넣고 아직 안 쓴 목소리를 정해 둬요. 목소리는 ${VOICES.length}개라 해설을 빼고 ${MAX_CAST}명까지 서로 다른 목소리를 줄 수 있어요.</p>
@@ -1058,7 +1348,16 @@ export async function showCast({ back = false } = {}) {
         if (!f[`n${i}`]) return;
         Object.assign(x, { name: f[`n${i}`].value.trim(), alias: f[`a${i}`].value.trim(), gender: f[`g${i}`].value, voice: f[`v${i}`].value, style: f[`s${i}`].value.trim() });
       });
+      const povHint = () => {
+        const v = f.pov.value;
+        f.querySelector('.cast-nar').hidden = v !== '1';
+        const d = cast.povBy?.[app.cur];
+        $('#povNow').textContent = v === 'auto' ? (d ? `이 장은 AI가 ${d.pov === '1' ? `1인칭(화자: ${d.narrator || '나'})` : '3인칭'}으로 판정했어요. 1인칭이면 해설과 화자의 대사를 같은 목소리로 읽어요.` : '읽기 시작할 때 AI가 장마다 시점과 화자를 판정해요. 1인칭이면 해설과 화자의 대사를 같은 목소리로 읽어요.') : v === '1' ? '해설(서술)과 화자 ‘나’의 대사를 화자 인물의 목소리로 읽어요.' : '해설은 해설 목소리로 따로 읽어요.';
+      };
+      f.pov.addEventListener('change', povHint);
       const draw = () => {
+        povHint();
+        $('#castNames').innerHTML = list.map((x) => `<option value="${h(x.name)}">`).join('');
         $('#castList').innerHTML = list.map(row).join('') || '<p class="hint">아직 없어요. AI로 찾거나 직접 넣어 주세요.</p>';
         const dup = list.length - new Set(list.map((x) => x.voice)).size;
         $('#castN').textContent = `${list.length}/${MAX_CAST}명${dup ? ` · 같은 목소리를 쓰는 인물 ${dup}쌍` : ''}`;
@@ -1090,6 +1389,31 @@ export async function showCast({ back = false } = {}) {
         if (b.dataset.c === 'add' && list.length < MAX_CAST) {
           list.push({ name: '', alias: '', gender: '모름', voice: autoVoice('', { chars: list }, { ...c, voice: f.nv.value }), style: '' });
           draw(); f[`n${list.length - 1}`]?.focus();
+        }
+        if (b.dataset.c === 'design') {
+          const text = app.project.order.map((id) => chapterText(id)).join('\n\n');
+          if (!text.trim()) { msg.textContent = '원고가 비어 있어요.'; return; }
+          f.querySelectorAll('[data-c=find],[data-c=design]').forEach((x) => { x.disabled = true; });
+          msg.textContent = `AI가 작품 전체(${text.length.toLocaleString()}자)를 읽고 목소리를 정하는 중…`;
+          try {
+            const d = await designCast(text);
+            const used = new Set([d.narrationVoice]);
+            for (const g of d.chars) {
+              let x = charOf(g.name, { chars: list });
+              if (!x) { if (list.length >= MAX_CAST) continue; x = { name: g.name, alias: '', gender: '모름', voice: '', style: '' }; list.push(x); }
+              if (g.alias && !x.alias) x.alias = g.alias;
+              if (g.gender) x.gender = g.gender;
+              x.style = g.style || x.style;
+              x.voice = used.has(g.voice) ? autoVoice(x.gender, { chars: list.filter((y) => y !== x && y.voice) }, { ...c, voice: d.narrationVoice }) : g.voice;
+              used.add(x.voice);
+            }
+            f.nv.value = d.narrationVoice;
+            f.nstyle.value = d.narrationStyle || '';
+            if (d.pov === '1인칭') { f.pov.value = '1'; f.narrator.value = (d.narrator && !ME.test(d.narrator)) ? d.narrator : ''; } else f.pov.value = '3';
+            draw();
+            msg.textContent = `${d.genre ? d.genre + ' · ' : ''}${d.pov || ''} · 인물 ${d.chars.length}명의 목소리와 연기 지시를 정했어요. ▶로 들어 보고 저장하세요. 해설 분위기도 바꿔 둘게요.`;
+          } catch (err) { msg.textContent = '✕ ' + err.message; }
+          f.querySelectorAll('[data-c=find],[data-c=design]').forEach((x) => { x.disabled = false; });
         }
         if (b.dataset.c === 'find') {
           const all = b.dataset.scope === 'all';
@@ -1124,6 +1448,10 @@ export async function showCast({ back = false } = {}) {
     list.forEach((x, i) => { if (f[`n${i}`]) Object.assign(x, { name: f[`n${i}`].value.trim(), alias: f[`a${i}`].value.trim(), gender: f[`g${i}`].value, voice: f[`v${i}`].value, style: f[`s${i}`].value.trim() }); });
     cast.chars = list.filter((x) => x.name).map(({ auto, ...x }) => x);
     Object.assign(c, { cast: f.on.checked, voice: f.nv.value, voice2: f.dv.value });
+    if (f.nstyle.value) Object.assign(c, { style: f.nstyle.value, styleId: 'custom' });
+    // 시점·화자를 바꾸면 장마다 한 판정은 지우고 새로 한다
+    if ((cast.pov || 'auto') !== f.pov.value || (cast.narrator || '') !== f.narrator.value.trim()) cast.povBy = {};
+    cast.pov = f.pov.value; cast.narrator = f.narrator.value.trim();
     saveSettings();
     await S.putProject(app.project);
     if (P.on) { const i = P.i; stop(); begin(P.chunks[i]?.paras[0]?.from ?? 0); }
@@ -1149,15 +1477,25 @@ export function bindReader() {
     <button id="rdPlay" class="icon-btn rd-main" aria-label="재생·멈춤">❚❚</button>
     <button id="rdNext" class="icon-btn" title="다음 조각" aria-label="다음 조각">⏭</button>
     <button id="rdStop" class="icon-btn" title="그만 읽기 (Esc)" aria-label="그만 읽기">■</button>
+    <button id="rdHere" class="icon-btn" title="커서가 있는 문단부터 읽기 (읽는 중에 문단을 두 번 눌러도 돼요)" aria-label="커서 문단부터 읽기">⤵</button>
     <span id="rdStatus" class="rd-status" aria-live="polite"></span><span id="rdPos" class="rd-pos"></span>
     <select id="rdRate" aria-label="빠르기">${[0.75, 0.85, 0.9, 1, 1.1, 1.2, 1.35, 1.5, 1.75, 2].map((v) => `<option value="${v}">${v}×</option>`).join('')}</select>
-    <button id="rdSet" class="icon-btn" title="낭독 설정" aria-label="낭독 설정">⚙</button>`;
+    <button id="rdSet" class="icon-btn" title="낭독 설정" aria-label="낭독 설정">⚙</button>
+    <button id="rdClose" class="icon-btn rd-close" title="낭독 끄기 (Esc)" aria-label="낭독 끄기">✕</button>`;
   document.body.appendChild(b);
   b.addEventListener('mousedown', (e) => { if (e.target.tagName !== 'SELECT') e.preventDefault(); }); // 편집기 커서를 지킨다
   $('#rdPlay').onclick = () => toggle();
   $('#rdPrev').onclick = () => skip(-1);
   $('#rdNext').onclick = () => skip(1);
   $('#rdStop').onclick = () => stop();
+  $('#rdClose').onclick = () => stop();
+  $('#rdHere').onclick = () => jumpTo(app.editor.state.selection.from);
+  // 읽는 중에 문단을 두 번 누르면 그 문단부터 이어 읽는다
+  $('#editorHost').addEventListener('dblclick', (e) => {
+    if (!P.on || app.cur !== P.chapter) return;
+    const at = app.editor.view.posAtCoords({ left: e.clientX, top: e.clientY });
+    if (at && jumpTo(at.pos)) { e.preventDefault(); status('이 문단부터 읽어요'); }
+  });
   $('#rdSet').onclick = () => showReaderSettings();
   $('#rdRate').onchange = (e) => {
     cfg().rate = +e.target.value || 1; saveSettings();
@@ -1165,6 +1503,9 @@ export function bindReader() {
     if (P.engine === 'browser' && P.on && !P.paused) playAt(P.i); // 기기 목소리는 다시 시작해야 빠르기가 바뀐다
   };
   app.editor.registerPlugin(readPlugin);
+  // 읽는 동안 손으로 스크롤하면 따라가기를 잠시 멈춘다
+  for (const ev of ['wheel', 'touchmove']) addEventListener(ev, () => { if (P.on) P.userScroll = Date.now(); }, { passive: true, capture: true });
+  addEventListener('keydown', (e) => { if (P.on && /^(PageUp|PageDown|Home|End)$/.test(e.key)) P.userScroll = Date.now(); }, true);
   app.editor.on('transaction', ({ transaction }) => mapPositions(transaction));
   // 읽는 장이 아닌 다른 장을 열면 멈춘다 (다음 장 이어 읽기는 제외)
   app.hooks.afterOpen.push(() => { if (P.on && app.cur !== P.chapter) setTimeout(() => { if (P.on && app.cur !== P.chapter) { stop(); toast('다른 장을 열어서 낭독을 멈췄어요.'); } }, 0); });

@@ -1003,3 +1003,7 @@ body.syn-open.syn-left .paper-scroll { margin-right: 0; margin-left: 272px; }
 }
 body.focus .syn-panel { display: none; }
 body.focus.syn-open .paper-scroll { margin: 0; }
+.ai-quick { display: flex; flex-wrap: wrap; gap: 4px; margin-top: -4px; }
+.rd-cloud summary { cursor: pointer; font-size: 13px; }
+.rd-cloud[open] { display: grid; gap: 6px; }
+.read-bar .rd-close { margin-left: 2px; font-size: 15px; }

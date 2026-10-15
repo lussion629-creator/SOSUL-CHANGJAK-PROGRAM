@@ -726,6 +726,160 @@ await test('내보내기: 처음에는 표지(작품 제목)·장 제목 없이,
   await ctx.close();
 });
 
+// ---------------- 낭독 ----------------
+// 흉내 음성: 24kHz 16비트 무음 WAV
+const fakeWav = (secs) => {
+  const n = Math.round(secs * 24000) * 2, b = Buffer.alloc(44 + n);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(24000, 24); b.writeUInt32LE(48000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n, 40);
+  return b.toString('base64');
+};
+// 구글 API 흉내: 음성(Gemini·Chirp)과 글 AI(시점·대사 판정·캐스팅)
+async function mockGoogle(ctx, { secs = 1, pov = { pov: '1인칭', narrator: '민준', gender: '남' } } = {}) {
+  const log = { tts: [], cloud: [], ask: [] };
+  await ctx.route('https://generativelanguage.googleapis.com/**', (r) => {
+    const url = r.request().url();
+    const body = r.request().postData() ? JSON.parse(r.request().postData()) : null;
+    if (url.includes('/interactions')) {
+      log.tts.push(body);
+      return r.fulfill({ json: { outputs: [{ type: 'audio', mime_type: 'audio/wav', data: fakeWav(secs) }] } });
+    }
+    if (url.includes('/models?')) return r.fulfill({ json: { models: [{ name: 'models/gemini-3.8-flash-tts', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-9-custom-tts', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-4-argon', supportedGenerationMethods: ['generateContent'] }] } });
+    const prompt = body.contents[0].parts[0].text;
+    log.ask.push({ model: url.match(/models\/([^:]+)/)[1], prompt });
+    let out;
+    if (prompt.includes('서술 시점')) out = pov;
+    else if (prompt.includes('캐스팅 감독')) out = { genre: '성장 소설', pov: '1인칭', narrator: '민준', narrationVoice: 'Charon', narrationStyle: '담담하게 회상하듯', chars: [{ name: '민준', gender: '남', voice: 'Puck', style: '열일곱 소년, 조금 높고 맑은 목소리, 빠른 말투' }, { name: '할머니', gender: '여', voice: 'Puck', style: '일흔 넘은 할머니, 느리고 갈라진 목소리, 사투리' }] };
+    else if (prompt.includes('누가 말했는지')) { const n = (prompt.match(/\[Q\d+\]/g) || []).length; out = { lines: Array.from({ length: n }, (_, i) => ({ q: i + 1, speaker: i === 0 ? '나' : '할머니', gender: '여' })) }; }
+    else out = {};
+    r.fulfill({ json: { candidates: [{ content: { parts: [{ text: JSON.stringify(out) }] } }] } });
+  });
+  await ctx.route('https://texttospeech.googleapis.com/**', (r) => {
+    log.cloud.push({ body: JSON.parse(r.request().postData()), key: r.request().headers()['x-goog-api-key'] });
+    r.fulfill({ json: { audioContent: fakeWav(secs) } });
+  });
+  return log;
+}
+const novel1 = '<p>나는 그날 처음으로 할머니 집에 갔다. 마당에는 감나무가 있었다.</p><p>“안녕하세요.” 내가 말했다. “왔냐.” 할머니가 대답했다.</p>';
+
+await test('낭독 1인칭: 해설과 ‘나’의 대사는 화자 인물의 목소리, 다른 인물은 제 목소리 (시점은 AI가 판정, 흉내)', async () => {
+  const { ctx, page } = await boot({ tts: { cast: true, cache: false, voice: 'Sulafat' }, ai: { provider: 'gemini', models: { gemini: 'gemini-4-argon' } } });
+  const log = await mockGoogle(ctx);
+  await page.evaluate(() => localStorage.setItem('nw-gemini-key', 'AIza-test-key-0000000000'));
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(500);
+  const { id } = await mkProject(page, [{ title: '1장', html: novel1 }]);
+  await run(page, `const R = await import('/src/reader.js'); await R.speak(A.app.editor.getText(), { chapter: A.app.cur });`);
+  assert(log.ask.some((x) => x.prompt.includes('서술 시점')), '시점을 판정해야 함');
+  assert(log.ask.every((x) => x.model === 'gemini-4-argon'), '고른 글 모델(gemini-4-argon)로 물어야 함: ' + log.ask.map((x) => x.model));
+  assert(log.ask.some((x) => x.prompt.includes('서술자 ‘나’는 민준')), '대사 판정에 화자를 알려야 함');
+  const cast = await run(page, `return A.app.project.cast;`);
+  const minjun = cast.chars.find((x) => x.name === '민준');
+  const halmi = cast.chars.find((x) => x.name === '할머니');
+  assert(minjun && halmi && minjun.voice !== halmi.voice, '인물 목록: ' + JSON.stringify(cast.chars));
+  // 보낸 음성 요청: 줄마다 어떤 목소리였는지
+  const spoken = [];
+  for (const b of log.tts) {
+    const sp = b.generation_config.speech_config;
+    const voiceOf = (lab) => (Array.isArray(sp) ? sp[0].voice : sp.speakers.find((x) => x.speaker === lab)?.voice);
+    for (const c of b.input[0].content) spoken.push([voiceOf(c.annotations[0].speaker), c.text]);
+  }
+  const vOf = (frag) => spoken.find(([, t]) => t.includes(frag))?.[0];
+  assert(vOf('할머니 집에 갔다') === minjun.voice, '해설은 화자(민준) 목소리: ' + JSON.stringify(spoken));
+  assert(vOf('안녕하세요') === minjun.voice, '‘나’의 대사도 민준 목소리');
+  assert(vOf('왔냐') === halmi.voice, '할머니 대사는 할머니 목소리');
+  assert(vOf('할머니 집에 갔다') !== 'Sulafat', '해설 목소리를 쓰면 안 됨');
+  // 3인칭으로 정하면 해설은 해설 목소리
+  log.tts.length = 0;
+  await run(page, `A.app.project.cast.pov = '3'; const R = await import('/src/reader.js'); await R.speak(A.app.editor.getText(), { chapter: A.app.cur });`);
+  const sp = log.tts[0].generation_config.speech_config;
+  assert(JSON.stringify(sp).includes('Sulafat'), '3인칭이면 해설 목소리: ' + JSON.stringify(sp));
+  await ctx.close();
+});
+
+await test('낭독: AI가 작품 전체를 읽고 인물마다 목소리·연기 지시를 정하고, 겹친 목소리는 바꾼다 (흉내)', async () => {
+  const { ctx, page } = await boot({ tts: { cast: true, cache: false } });
+  const log = await mockGoogle(ctx);
+  await page.evaluate(() => localStorage.setItem('nw-gemini-key', 'AIza-test-key-0000000000'));
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(500);
+  await mkProject(page, [{ title: '1장', html: novel1 }, { title: '2장', html: '<p>둘째 장의 글. “밥 먹어라.” 할머니가 불렀다.</p>' }]);
+  await page.evaluate(() => { (async () => (await import('/src/reader.js')).showCast())(); });
+  await page.waitForSelector('#dlg[open] [data-c=design]');
+  await page.click('#dlg [data-c=design]');
+  await page.waitForFunction(() => /목소리와 연기 지시를 정했어요/.test(document.querySelector('#castMsg')?.textContent || ''));
+  const prompt = log.ask.find((x) => x.prompt.includes('캐스팅 감독')).prompt;
+  assert(prompt.includes('둘째 장의 글') && prompt.includes('감나무'), '작품 전체를 보내야 함');
+  assert(await page.inputValue('#dlg [name=pov]') === '1' && await page.inputValue('#dlg [name=narrator]') === '민준', '시점·화자 채움');
+  await page.click('#dlg .dlg-foot button[value=ok]');
+  await page.waitForTimeout(300);
+  const r = await run(page, `const R = await import('/src/reader.js'); return { cast: A.app.project.cast, c: R.cfg() };`);
+  const m = r.cast.chars.find((x) => x.name === '민준'), g = r.cast.chars.find((x) => x.name === '할머니');
+  assert(m.voice === 'Puck' && m.style.includes('열일곱'), '민준: ' + JSON.stringify(m));
+  assert(g.voice !== 'Puck' && g.voice !== 'Charon' && g.style.includes('할머니'), '겹친 목소리는 바꿔야 함: ' + JSON.stringify(g));
+  assert(r.c.voice === 'Charon' && r.c.style === '담담하게 회상하듯', '해설 목소리·분위기: ' + r.c.voice + r.c.style);
+  assert(r.cast.pov === '1' && r.cast.narrator === '민준', '시점 저장');
+  await ctx.close();
+});
+
+await test('낭독: Chirp 3 HD는 구글 클라우드 TTS로, 목소리마다 따로 보내고 클라우드 키를 쓴다 · TTS 모델 목록 불러오기 (흉내)', async () => {
+  const { ctx, page } = await boot({ tts: { cache: false, model: 'chirp3-hd', voice: 'Kore', voice2: 'Puck' } });
+  const log = await mockGoogle(ctx);
+  await page.evaluate(() => { localStorage.setItem('nw-gemini-key', 'AIza-gemini-0000000000'); localStorage.setItem('nw-gcloud-key', 'AIza-cloud-1111111111'); });
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(500);
+  const r = await run(page, `const R = await import('/src/reader.js'); const x = await R.speak('바람이 불었다. “어디 가?” 그가 물었다.'); return x.secs;`);
+  assert(log.tts.length === 0 && log.cloud.length === 3, `클라우드로만 3번: ${log.tts.length}/${log.cloud.length}`);
+  assert(log.cloud[0].body.voice.name === 'ko-KR-Chirp3-HD-Kore' && log.cloud[1].body.voice.name === 'ko-KR-Chirp3-HD-Puck', JSON.stringify(log.cloud.map((x) => x.body.voice)));
+  assert(log.cloud.every((x) => x.key === 'AIza-cloud-1111111111'), '클라우드 키');
+  assert(Math.abs(r - 3) < 0.05, '세 조각을 이어 붙임 ' + r);
+  // 낭독 설정: 내 키로 쓸 수 있는 TTS 모델 불러오기 → 목록에 생김
+  await page.evaluate(() => { (async () => (await import('/src/reader.js')).showReaderSettings())(); });
+  await page.waitForSelector('#dlg[open] [data-x=models]');
+  await page.click('#dlg [data-x=models]');
+  await page.waitForFunction(() => /TTS 모델 2개/.test(document.querySelector('#rdModels')?.textContent || ''));
+  assert(await page.$('#dlg select[name=model] option[value="gemini-9-custom-tts"]'), '불러온 모델이 목록에');
+  await ctx.close();
+});
+
+await test('낭독: 이 문장만 읽기는 커서 문장 하나만, 읽는 중 다른 문단을 두 번 누르면 그 문단부터, 빠르게 읽어도 화면이 따라간다', async () => {
+  const { ctx, page } = await boot({ tts: { cache: false, rate: 2, chunk: 400, prefetch: 1 } });
+  const log = await mockGoogle(ctx, { secs: 3 });
+  await page.evaluate(() => localStorage.setItem('nw-gemini-key', 'AIza-test-key-0000000000'));
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(500);
+  const paras = Array.from({ length: 40 }, (_, i) => `<p>${i + 1}번째 문단입니다. 첫 문장이 있고 둘째 문장도 있다. 그리고 셋째 문장으로 끝난다. ${'가나다라마바사 '.repeat(8)}</p>`).join('');
+  await mkProject(page, [{ title: '1장', html: paras }]);
+  // 문장 범위
+  const sr = await run(page, `const R = await import('/src/reader.js'); const ed = A.app.editor; let at; ed.state.doc.descendants((n, p) => { if (at == null && n.isText && n.text.includes('둘째 문장')) at = p + n.text.indexOf('둘째 문장') + 2; }); ed.commands.setTextSelection(at); const [a, b] = R.sentenceRange(); return ed.state.doc.textBetween(a, b);`);
+  assert(sr === '첫 문장이 있고 둘째 문장도 있다.', '문장 범위: ' + sr);
+  await run(page, `(await import('/src/reader.js')).readSentence();`);
+  await page.waitForFunction(() => document.querySelector('#readBar') && !document.querySelector('#readBar').hidden);
+  await page.waitForTimeout(400);
+  const sent = log.tts.map((b) => b.input[0].content.map((c) => c.text).join(' '));
+  assert(sent.length === 1 && sent[0] === '첫 문장이 있고 둘째 문장도 있다.', '문장만 보냄: ' + JSON.stringify(sent));
+  await run(page, `(await import('/src/reader.js')).stop();`);
+  // 장 처음부터 2배속으로 읽기: 읽는 문단이 화면 안(위쪽 40% 근처)에 있어야 한다
+  log.tts.length = 0;
+  await run(page, `(await import('/src/reader.js')).readChapter();`);
+  await page.waitForTimeout(4500);
+  const pos = await page.evaluate(() => {
+    const el = document.querySelector('.ra-cur'), sc = document.querySelector('#paperScroll');
+    if (!el) return null;
+    const r = el.getBoundingClientRect(), s = sc.getBoundingClientRect();
+    return { top: r.top - s.top, bottom: r.bottom - s.top, h: s.height, scrolled: sc.scrollTop, n: [...el.parentElement.children].indexOf(el) };
+  });
+  assert(pos && pos.n > 2, '읽는 자리가 넘어가야 함 ' + JSON.stringify(pos));
+  assert(pos.top < pos.h * 0.7 && pos.bottom > 0, '읽는 문단이 화면 안에 있어야 함 ' + JSON.stringify(pos));
+  // 읽는 중 다른 문단을 두 번 누르면 그 문단부터
+  const target = await page.$('.ProseMirror p:nth-child(' + (pos.n + 4) + ')');
+  await target.scrollIntoViewIfNeeded();
+  const want = (await target.textContent()).slice(0, 8);
+  log.tts.length = 0;
+  await target.dblclick();
+  const cur = await page.evaluate(() => new Promise((res) => requestAnimationFrame(() => res(document.querySelector('.ra-cur')?.textContent.slice(0, 8)))));
+  assert(cur === want, `두 번 누른 문단부터: ${cur} / ${want}`);
+  assert(log.tts.length === 0 || log.tts[0].input[0].content.map((c) => c.text).join(' ').startsWith(want), '그 문단부터 음성 요청');
+  await run(page, `(await import('/src/reader.js')).stop();`);
+  await ctx.close();
+});
+
 // ---------------- 문장 보관함 ----------------
 await test('문장 보관함: 고른 글 지우기·잘라내기·이어서 지우기는 50자 이상이면 담고, 짧은 것·되돌리기는 담지 않으며 백업에 함께 간다', async () => {
   const { ctx, page } = await boot();

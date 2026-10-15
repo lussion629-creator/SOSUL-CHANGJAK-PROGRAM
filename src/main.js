@@ -31,7 +31,7 @@ import { bindSynonyms, toggleSynonyms } from './synonym.js';
 import { initStash, renderStash, openStash } from './stash.js';
 const ACTIONS = {
   checkUpdate: () => window.desktop?.checkUpdate?.(),
-  readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
+  readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readSentence: () => R.readSentence(), readParagraph: () => R.readParagraph(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
   proof: () => PF.toggleProof(), proofList: () => PF.showProof(), aiSettings: () => showAiSettings(),
   annotate: () => A.addAnnotation(), index: () => A.showIndex(), keys: () => showKeys(), tidy: () => T.showTidy(), tidyMark: () => T.toggleTidyMark(), appear: () => T.showAppearances(),
   annoSide: () => { const nx = { right: 'left', left: 'off', off: 'right' }[app.settings.annoSide || 'right']; A.setAnnoSide(nx); toast({ right: '주석을 오른쪽 여백에 보여 줘요.', left: '주석을 왼쪽 여백에 보여 줘요.', off: '여백 주석을 숨겼어요. 주석 글자를 누르면 볼 수 있어요.' }[nx]); },
@@ -258,7 +258,7 @@ function bind() {
     addChapter: () => addChapter(), prevChapter: () => chapterStep(-1), nextChapter: () => chapterStep(1),
     speak: () => ACTIONS.speak(), sprint: () => ACTIONS.sprint(), index: () => A.showIndex(), keys: () => showKeys(),
     tidy: () => T.showTidy(), tidyMark: () => T.toggleTidyMark(), appear: () => T.showAppearances(), split: () => T.splitChapterAtCursor(),
-    readAloud: () => R.readAloud(), readNext: () => R.skip(1), readPrev: () => R.skip(-1), readStop: () => R.stop(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
+    readAloud: () => R.readAloud(), readSentence: () => R.readSentence(), readParagraph: () => R.readParagraph(), readHere: () => R.jumpTo(app.editor.state.selection.from), readNext: () => R.skip(1), readPrev: () => R.skip(-1), readStop: () => R.stop(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
     help: () => toggleHelp(), colors: () => showColors(), complement: () => toggleComplement(), synonyms: () => toggleSynonyms(), zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), zoomReset: () => zoomStep(0), storage: () => F.showStorage(), server: () => F.showServer(),
   });
   document.addEventListener('keydown', (e) => {
