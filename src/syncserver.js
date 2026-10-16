@@ -112,3 +112,13 @@ export async function listBundles() { return (await call('/projects')).json(); }
 export async function pullBundle(id, read) {
   return read(await (await call(`/projects/${encodeURIComponent(id)}`)).arrayBuffer());
 }
+
+// ---------- 등록한 기기 ----------
+// 예전 서버(기기 목록이 없는 판)는 404를 돌려준다: 그때는 빈 목록으로 둔다
+export async function devices() {
+  try { return await (await call('/devices')).json(); } catch (e) { if (e.status === 404) return null; throw e; }
+}
+export async function putDevice(dev) {
+  try { return await (await call(`/devices/${encodeURIComponent(dev.id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dev) })).json(); } catch (e) { if (e.status === 404) return null; throw e; }
+}
+export async function removeDevice(id) { await call(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }); }

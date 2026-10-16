@@ -6,7 +6,7 @@ import {
   app, saveNow, openProject, openChapter, addChapter, renderBinder, saveSettings, applySettings, updateCounts,
   todayWritten, addOf, renderGoal, syncNow, refreshSyncPill, setSyncState, usingServer, isOffline, syncTarget, bundleForSync, STATUS, projectTotal, beforeImport, rescueFile,
 } from './app.js';
-import { openFile, exportBook, download, OPEN_ACCEPT } from './io/index.js';
+import { openFile, exportBook, download, withDate, OPEN_ACCEPT } from './io/index.js';
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
 import { setSearch, gotoMatch, findMatches } from './editor.js';
 import { getHTMLFromFragment } from '@tiptap/core';
@@ -192,6 +192,11 @@ export async function showExport() {
         <option value="md">마크다운 (.md)</option>
         <option value="html">웹 페이지 (.html)</option>
       </select></label>
+      <label class="field"><span>파일 이름에 날짜</span><select name="nameDate">
+        <option value="off">붙이지 않기</option>
+        <option value="date" ${app.settings.nameDate === 'date' ? 'selected' : ''}>날짜 붙이기 (예: 제목 ${S.today()}.docx)</option>
+        <option value="time" ${app.settings.nameDate === 'time' ? 'selected' : ''}>날짜와 시각 붙이기 (예: 제목 ${S.today()} 1430.docx)</option>
+      </select></label>
       <label class="field"><span>범위</span><select name="range"><option value="all">작품 전체 (${app.project.order.length}개 장)</option><option value="cur">지금 장만</option></select></label>
       <div class="ps-sum"><span>쪽 설정</span><b>${h(layoutSummary())}</b><button type="button" class="small" data-open-setup>바꾸기</button></div>
       <label class="check"><input type="checkbox" name="titlePage" ${ex.titlePage ? 'checked' : ''}> 표지 (작품 제목·지은이)</label>
@@ -209,6 +214,7 @@ export async function showExport() {
   const f = r.form;
   app.settings.author = f.author.value.trim();
   app.settings.exportOpts = { titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, chapterBreak: f.chapterBreak.checked };
+  app.settings.nameDate = f.nameDate.value;
   saveSettings();
   const book = bookOf(f.range.value);
   if (f.annos.checked && f.fmt.value === 'docx') book.annos = await annosForExport();
@@ -217,6 +223,7 @@ export async function showExport() {
   if (f.fmt.value === 'pdf') return printBook(book, opt);
   try {
     const out = await exportBook(f.fmt.value, book, opt);
+    out.name = withDate(out.name, app.settings.nameDate);
     download(out.blob, out.name);
     if (f.toDrive?.checked) {
       if (!G.status().connected) await G.connect(); // 직접 고른 일이므로 필요하면 연결 창을 연다
@@ -256,7 +263,7 @@ export async function downloadBackup() {
   // 기기에 저장하지 못했으면 기기 것은 옛 원고이므로, 메모리의 최신 원고로 복구 파일을 만든다
   if (!(await saveNow())) { await rescueFile(); return; }
   const b = S.packBundle(await S.exportBundle(app.project.id));
-  download(new Blob([JSON.stringify(b)], { type: 'application/json' }), `${app.project.title}.novel.json`);
+  download(new Blob([JSON.stringify(b)], { type: 'application/json' }), withDate(`${app.project.title}.novel.json`, app.settings.nameDate));
   toast('작품 전체(자료·버전 기록 포함)를 백업 파일로 받았어요.');
 }
 
@@ -511,6 +518,7 @@ export async function showSettings() {
         <div class="field"><span>화면 색</span><button type="button" class="small" data-colors="1">${{ auto: '기기 설정 따르기', light: '라이트', dark: '다크' }[s.theme] || h(s.bgColors.find((c) => c.color === s.bgColor)?.name || s.bgColor || '내 색')} · 바꾸기…</button></div>
         <label class="field"><span>자동 버전 간격 (분)</span><select name="snapshotMinutes">${[1, 3, 5, 10, 30].map((m) => `<option ${m === s.snapshotMinutes ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
       </div>
+      <label class="field"><span>저장하는 파일 이름에 날짜 (내보내기·백업·음성 파일)</span><select name="nameDate">${[['off', '붙이지 않기'], ['date', `날짜 붙이기 (예: 제목 ${S.today()}.docx)`], ['time', `날짜와 시각 붙이기 (예: 제목 ${S.today()} 1430.docx)`]].map(([v, l]) => `<option value="${v}" ${(s.nameDate || 'off') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="check"><input type="checkbox" name="smartQuotes" ${s.smartQuotes ? 'checked' : ''}> 따옴표 자동 변환 (" → “ ”)</label>
       <label class="check"><input type="checkbox" name="typewriter" ${s.typewriter ? 'checked' : ''}> 집중 모드에서 타자기 스크롤 (쓰는 줄을 화면 가운데에)</label>
       <label class="check"><input type="checkbox" name="dimFocus" ${s.dimFocus ? 'checked' : ''}> 집중 모드에서 지금 문단만 밝게</label>
@@ -534,7 +542,7 @@ export async function showSettings() {
   Object.assign(s, {
     font: f.font.value, size: +f.size.value, lineHeight: +f.lineHeight.value, width: +f.width.value, paraSpacing: +f.paraSpacing.value,
     snapshotMinutes: +f.snapshotMinutes.value, indent: f.indent.checked, smartQuotes: f.smartQuotes.checked,
-    typewriter: f.typewriter.checked, dimFocus: f.dimFocus.checked,
+    typewriter: f.typewriter.checked, dimFocus: f.dimFocus.checked, nameDate: f.nameDate.value,
   });
   saveSettings();
 }
@@ -603,7 +611,7 @@ export async function driveImport() {
 }
 
 // ---------- 동기화: 구글 드라이브 / 동기화 서버 중 고른 곳 ----------
-function useTarget(t) {
+export function useTarget(t) {
   if (app.settings.syncTarget === t) return;
   app.settings.syncTarget = t;
   saveSettings();

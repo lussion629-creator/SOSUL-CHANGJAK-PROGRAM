@@ -30,7 +30,7 @@ export const app = {
   syncTimer: null,
   lastSnap: new Map(), // chapterId → 마지막 버전
   states: new Map(), // chapterId → EditorState (장마다 실행 취소 기록 유지)
-  hooks: { afterSave: [], afterOpen: [], clips: [] },
+  hooks: { afterSave: [], afterOpen: [], clips: [], afterSync: [] },
 };
 
 // ---------- 설정 ----------
@@ -1016,6 +1016,7 @@ export async function syncNow({ quiet = false } = {}) {
       break;
     }
     pill('ok', `☁ ${hm(Date.now())} 동기화`);
+    app.hooks.afterSync?.forEach((fn) => { try { fn(B); } catch { /* 기기 등록은 없어도 된다 */ } });
     if (!quiet && isOpen(pid)) toast(server ? '동기화 서버에 저장했어요.' : '구글 드라이브에 저장했어요.');
   } catch (e) {
     if (isOpen(pid)) app.syncPending = true;
@@ -1041,7 +1042,7 @@ export function refreshSyncPill() {
   const st = G.status();
   pill.title = '구글 드라이브';
   if (!st.configured) setSyncState('', '☁ 동기화 꺼짐');
-  else if (!st.connected) setSyncState('', '☁ 드라이브 연결하기');
+  else if (!st.connected) { if (st.linked) setSyncState('err', '☁ 눌러서 다시 연결'); else setSyncState('', '☁ 드라이브 연결하기'); }
   else if (!shown()) setSyncState('ok', '☁ 드라이브 연결됨');
 }
 

@@ -5,7 +5,7 @@ import { app, saveSettings, openChapter, htmlParagraphs } from './app.js';
 import * as S from './store.js';
 import { askJSON, aiLabel, aiMissing, showAiSettings } from './ai.js';
 import { $, h, toast, dialog } from './ui.js';
-import { download } from './io/index.js';
+import { download, withDate } from './io/index.js';
 import { openDB } from 'idb';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -1083,7 +1083,7 @@ export async function exportAudio() {
   let o = 44;
   for (const p of pcms) { out.set(p, o); o += p.length; }
   const name = (range === 'all' ? app.project.title : `${app.project.title} - ${app.chapters.get(app.cur)?.title || ''}`).replace(/[\\/:*?"<>|]/g, '_').trim();
-  download(new Blob([out], { type: 'audio/wav' }), `${name || '낭독'}.wav`);
+  download(new Blob([out], { type: 'audio/wav' }), withDate(`${name || '낭독'}.wav`, app.settings.nameDate));
   toast(`음성 파일을 저장했어요 (${fmtSecs(len / 2 / RATE)}).`, 5000);
 }
 // 범위 → [{title?, paras}]

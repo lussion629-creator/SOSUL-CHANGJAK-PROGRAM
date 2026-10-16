@@ -127,6 +127,32 @@ function readBody(req) {
   });
 }
 
+// ---------- 기기 목록 ----------
+const DEVICES = path.join(DATA, 'devices.json');
+async function readDevices() { try { const d = JSON.parse(await fsp.readFile(DEVICES, 'utf8')); return Array.isArray(d) ? d : []; } catch { return []; } }
+const clean = (v, n = 80) => String(v ?? '').replace(/[\u0000-\u001f]/g, '').slice(0, n);
+async function devices(req, res, parts) {
+  if (parts.length === 1 && req.method === 'GET') return send(res, 200, await readDevices());
+  const id = parts[1];
+  if (parts.length !== 2 || !ID.test(id || '')) return err(res, 404, '없는 주소예요.');
+  return withLock('devices', async () => {
+    let list = await readDevices();
+    if (req.method === 'PUT') {
+      let d = {};
+      try { d = JSON.parse((await readBody(req)).toString('utf8') || '{}'); } catch { return err(res, 400, '기기 정보를 읽지 못했어요.'); }
+      const dev = { id, name: clean(d.name) || '이름 없는 기기', platform: clean(d.platform, 20), app: clean(d.app, 20), lastSync: new Date().toISOString(), since: list.find((x) => x.id === id)?.since || new Date().toISOString() };
+      list = [dev, ...list.filter((x) => x.id !== id)].slice(0, 50);
+      await writeAtomic(DEVICES, JSON.stringify(list));
+      return send(res, 200, dev);
+    }
+    if (req.method === 'DELETE') {
+      await writeAtomic(DEVICES, JSON.stringify(list.filter((x) => x.id !== id)));
+      return send(res, 200, { ok: true });
+    }
+    return err(res, 405, '지원하지 않는 요청이에요.');
+  });
+}
+
 // ---------- API ----------
 async function api(req, res, parts) {
   // 앱이 이 서버가 맞는지 알아보는 곳 (암호 없이)
@@ -140,6 +166,9 @@ async function api(req, res, parts) {
   fails.delete(ip);
 
   if (parts[0] === 'ping' && parts.length === 1) return send(res, 200, { ok: true, version: VERSION, time: new Date().toISOString() });
+
+  // 등록한 기기 목록: 이 서버에 맞춰 쓰는 컴퓨터·휴대폰 (이름·마지막 동기화 시각만)
+  if (parts[0] === 'devices') return devices(req, res, parts);
 
   if (parts[0] !== 'projects') return err(res, 404, '없는 주소예요.');
 

@@ -1007,3 +1007,12 @@ body.focus.syn-open .paper-scroll { margin: 0; }
 .rd-cloud summary { cursor: pointer; font-size: 13px; }
 .rd-cloud[open] { display: grid; gap: 6px; }
 .read-bar .rd-close { margin-left: 2px; font-size: 15px; }
+/* 내 기기 연결 */
+.dev-list { display: grid; gap: 6px; }
+.dev-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line, var(--bg2)); border-radius: 8px; flex-wrap: wrap; }
+.dev-row.me { background: var(--bg2); }
+.dev-row small { color: var(--ink2); flex: 1; min-width: 0; }
+.dev-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.dev-code { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
+.dev-code textarea { font: 12px/1.4 ui-monospace, monospace; word-break: break-all; width: 100%; min-width: 0; }
+.dev-code .hint { grid-column: 1 / -1; }

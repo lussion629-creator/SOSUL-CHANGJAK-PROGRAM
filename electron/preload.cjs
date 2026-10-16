@@ -7,5 +7,7 @@ if (location.origin === 'http://localhost:47615') {
     checkUpdate: () => ipcRenderer.invoke('check-update'),
     version: () => ipcRenderer.invoke('app-version'),
     forceClose: (what) => ipcRenderer.send('force-close', what === 'update' ? 'update' : 'close'),
+    hostServer: (on) => ipcRenderer.invoke('host-server', on === true || on === false ? on : null),
+    deviceInfo: () => ipcRenderer.invoke('device-info'),
   });
 }

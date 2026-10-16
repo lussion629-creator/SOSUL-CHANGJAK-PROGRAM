@@ -262,8 +262,7 @@ await test('F02 동기화 병합: 다른 기기에서 지운 장은 휴지통으
 
 // ---------------- F03 동기화 중 작품 전환 ----------------
 // 흉내 서버: page.route로 /api 요청에 답한다. 지정한 요청은 풀어 줄 때까지 붙잡아 둔다.
-async function fakeServer(page) {
-  const files = new Map(); // id → {modifiedTime, size, body}
+async function fakeServer(page, files = new Map(), devs = new Map()) { // files: id → {modifiedTime, size, body}
   const hold = { match: null, release: null, hit: null };
   let n = 0;
   await page.route('http://sync.test/api/**', async (route) => {
@@ -277,6 +276,13 @@ async function fakeServer(page) {
       await new Promise((r) => { hold.release = r; });
     }
     if (u.pathname === '/api/ping') return route.fulfill({ json: { ok: true } });
+    if (u.pathname === '/api/projects') return route.fulfill({ json: [...files].map(([id, f]) => ({ id, name: id, modifiedTime: f.modifiedTime, size: f.size })) });
+    const dm = u.pathname.match(/^\/api\/devices(?:\/([^/]+))?$/);
+    if (dm) {
+      if (req.method() === 'PUT') { const d = { ...JSON.parse(req.postData()), lastSync: new Date().toISOString() }; devs.set(d.id, d); return route.fulfill({ json: d }); }
+      if (req.method() === 'DELETE') { devs.delete(decodeURIComponent(dm[1])); return route.fulfill({ json: { ok: true } }); }
+      return route.fulfill({ json: [...devs.values()] });
+    }
     if (!m) return route.fulfill({ status: 404, json: {} });
     const id = decodeURIComponent(m[1]);
     if (m[2]) { const f = files.get(id); return f ? route.fulfill({ json: { id, modifiedTime: f.modifiedTime, size: f.size } }) : route.fulfill({ status: 404, json: { error: 'none' } }); }
@@ -290,7 +296,7 @@ async function fakeServer(page) {
     return route.fulfill({ status: 405, json: {} });
   });
   return {
-    files,
+    files, devs,
     holdNext(re) { return new Promise((r) => { hold.match = re; hold.hit = r; }); },
     release() { hold.release?.(); },
   };
@@ -936,7 +942,175 @@ await test('문장 보관함: 고른 글 지우기·잘라내기·이어서 지�
   await ctx.close();
 });
 
-export { browser, boot, run, mkProject, typeInto, pressDialog, test, assert, results };
+// ---------------- 드라이브 연결 유지 · 내 기기 연결 ----------------
+// 구글 로그인(GIS)과 드라이브 API를 흉내 낸다. 요청한 prompt 값을 window.__prompts에 남긴다
+async function mockDrive(ctx, { failSilent = false } = {}) {
+  await ctx.addInitScript((failSilent) => {
+    window.__prompts = [];
+    window.google = { accounts: { oauth2: {
+      initTokenClient: (cfg) => ({ requestAccessToken: ({ prompt }) => {
+        window.__prompts.push(prompt);
+        setTimeout(() => (prompt === 'none' && failSilent ? cfg.error_callback({ type: 'popup_failed_to_open' }) : cfg.callback({ access_token: 'tok' + window.__prompts.length, expires_in: 3600 })), 10);
+      } }),
+      revoke: () => {},
+    } } };
+  }, failSilent);
+  const files = new Map();
+  await ctx.route('https://www.googleapis.com/**', async (route) => {
+    const req = route.request();
+    const u = new URL(req.url());
+    const qq = u.searchParams.get('q') || '';
+    if (/\/files$/.test(u.pathname) && req.method() === 'GET') {
+      if (/vnd.google-apps.folder/.test(qq)) return route.fulfill({ json: { files: [{ id: 'folder1' }] } });
+      const pm = qq.match(/key='(\w+)' and value='([^']+)'/);
+      const list = [...files.values()].filter((f) => (pm ? f.appProperties?.[pm[1]] === pm[2] : /\.novel\.json/.test(f.name)));
+      return route.fulfill({ json: { files: list } });
+    }
+    const idm = u.pathname.match(/\/files\/([^/]+)$/);
+    if (idm && req.method() === 'GET') return route.fulfill({ body: files.get(idm[1])?.body || '' });
+    if (/upload/.test(u.pathname)) {
+      const body = req.postDataBuffer();
+      const raw = body.toString('latin1');
+      const meta = JSON.parse(Buffer.from(raw.match(/\r\n\r\n(\{.*?\})\r\n/s)[1], 'latin1').toString('utf8'));
+      const fi = raw.indexOf('name="file"'); const st = raw.indexOf('\r\n\r\n', fi) + 4; const en = raw.lastIndexOf('\r\n--');
+      const id = idm ? idm[1] : 'f' + (files.size + 1);
+      const old = files.get(id) || {};
+      files.set(id, { ...old, ...meta, id, body: body.subarray(st, en), modifiedTime: new Date().toISOString(), size: en - st });
+      return route.fulfill({ json: { id, modifiedTime: files.get(id).modifiedTime, size: en - st } });
+    }
+    return route.fulfill({ json: {} });
+  });
+  return files;
+}
+
+await test('드라이브: 한 번 연결하면 앱을 다시 켜거나 업데이트해도 연결이 남고, 표가 끝나면 창 없이(prompt=none) 다시 받는다', async () => {
+  const { ctx, page } = await boot({ syncTarget: 'drive', driveClientId: 'x.apps.googleusercontent.com', autoSync: false });
+  await mockDrive(ctx);
+  await page.reload(); await page.waitForSelector('.ProseMirror');
+  await run(page, `const G = await import('/src/gdrive.js'); await G.connect();`);
+  assert((await page.evaluate(() => window.__prompts)).join() === 'consent', '처음은 동의 화면');
+  const ls = await page.evaluate(() => ({ t: localStorage.getItem('gd-token'), l: localStorage.getItem('gd-linked') }));
+  assert(ls.t && ls.l === 'x.apps.googleusercontent.com', '표와 연결 표시는 localStorage에: ' + JSON.stringify(ls));
+  // 다시 켜기(업데이트 뒤와 같다): 표가 남아 있어 바로 연결됨
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(300);
+  assert((await run(page, `const G = await import('/src/gdrive.js'); return G.status().connected;`)) === true, '다시 켠 뒤에도 연결');
+  // 표가 끝난 채로 켜기: 창 없이 조용히 새 표
+  await page.evaluate(() => { const t = JSON.parse(localStorage.getItem('gd-token')); t.expires_at = Date.now() - 1000; localStorage.setItem('gd-token', JSON.stringify(t)); });
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(800);
+  const st = await run(page, `const G = await import('/src/gdrive.js'); return G.status();`);
+  assert(st.connected, '조용히 다시 연결: ' + JSON.stringify(st));
+  assert((await page.evaluate(() => window.__prompts)).join() === 'none', '창 없이 받기');
+  // 드라이브 호출 중 401이 나도 다시 받아 이어 간다
+  await run(page, `const G = await import('/src/gdrive.js'); return G.listBundles();`);
+  await ctx.close();
+});
+
+await test('드라이브: 조용한 재연결이 막히면(브라우저) ☁ 표시가 ‘눌러서 다시 연결’이 되고, 아무 곳이나 누르면 다시 연결한다', async () => {
+  const { ctx, page } = await boot({ syncTarget: 'drive', driveClientId: 'x.apps.googleusercontent.com', autoSync: false });
+  await mockDrive(ctx, { failSilent: true });
+  await page.evaluate(() => { localStorage.setItem('gd-linked', 'x.apps.googleusercontent.com'); localStorage.setItem('gd-token', JSON.stringify({ access_token: 'old', expires_at: Date.now() - 1000 })); });
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(500);
+  assert(/다시 연결/.test(await page.textContent('#syncState')), '표시: ' + await page.textContent('#syncState'));
+  await page.evaluate(() => { window.google.accounts.oauth2.initTokenClient = (cfg) => ({ requestAccessToken: ({ prompt }) => { window.__prompts.push('g:' + prompt); setTimeout(() => cfg.callback({ access_token: 'new', expires_in: 3600 }), 10); } }); });
+  await page.mouse.click(640, 400); await page.waitForTimeout(300);
+  assert((await run(page, `const G = await import('/src/gdrive.js'); return G.status().connected;`)) === true, '누르면 다시 연결');
+  await ctx.close();
+});
+
+await test('내 기기: 데스크톱에서 만든 연결 코드를 랩톱에 넣으면 같은 서버에 붙어 작품을 모두 받아 오고, 두 기기가 목록에 오른다', async () => {
+  const files = new Map(), devs = new Map();
+  // 데스크톱: 서버에 연결해 작품 두 개를 올림
+  const A = await boot({ syncTarget: 'server', syncServer: 'http://sync.test', autoSync: false, deviceName: '집 데스크톱' });
+  await A.page.evaluate(() => localStorage.setItem('nw-sync-code', 'test-code-1234'));
+  await fakeServer(A.page, files, devs);
+  await run(A.page, `const SV = await import('/src/syncserver.js'); SV.configure('http://sync.test');`);
+  await run(A.page, `const p = await S.createProject('두 번째 작품', [{ title: '1장', html: '<p>둘째</p>' }]); await A.openProject(p.id); await A.syncNow({ quiet: true });`);
+  await mkProject(A.page, [{ title: '1장', html: '<p>첫째 작품 본문</p>' }], '첫 작품');
+  await run(A.page, `await A.syncNow({ quiet: true });`);
+  assert(files.size === 2, '서버에 2개: ' + files.size);
+  await A.page.evaluate(() => document.querySelector('[data-act="devices"]').click());
+  await A.page.waitForSelector('#dlg[open] .dev-row');
+  await A.page.click('#dlg [data-d=make]');
+  const code = await A.page.inputValue('#devCode textarea');
+  assert(/^NW1-/.test(code), '코드: ' + code);
+  assert([...devs.values()].some((d) => d.name === '집 데스크톱'), '데스크톱 등록');
+  // 랩톱: 아무 연결 없이 시작해 코드만 넣음
+  const B = await boot({ deviceName: '노트북' });
+  await fakeServer(B.page, files, devs);
+  await B.page.evaluate(() => document.querySelector('[data-act="devices"]').click());
+  await B.page.click('#dlg [data-d=join]');
+  await B.page.fill('#dlg textarea[name=code]', code);
+  await B.page.click('#dlg [data-d=go]');
+  await B.page.waitForFunction(() => /작품 2개를 받아 왔어요/.test(document.querySelector('#devMsg').textContent), null, { timeout: 10000 });
+  const titles = await run(B.page, `return (await S.listProjects()).map((p) => p.title).sort();`);
+  assert(titles.includes('첫 작품') && titles.includes('두 번째 작품'), '받은 작품: ' + titles);
+  const st = await run(B.page, `return { t: A.syncTarget(), s: A.app.settings.syncServer, synced: (await S.listProjects()).every((p) => p.srvSyncedAt) };`);
+  assert(st.t === 'server' && st.s === 'http://sync.test' && st.synced, '랩톱 설정: ' + JSON.stringify(st));
+  assert([...devs.values()].map((d) => d.name).sort().join() === '노트북,집 데스크톱', '기기 목록: ' + [...devs.values()].map((d) => d.name));
+  // 잘못된 코드
+  const bad = await run(B.page, `const D = await import('/src/devices.js'); try { D.readCode('NW1-abc'); return 'ok'; } catch (e) { return e.message; }`);
+  assert(/읽지 못|아니에요/.test(bad), '잘못된 코드: ' + bad);
+  const dc = await run(B.page, `const D = await import('/src/devices.js'); return D.readCode(D.makeCode({ t: 'd', i: 'abc.apps.googleusercontent.com' }));`);
+  assert(dc.t === 'd' && dc.i === 'abc.apps.googleusercontent.com', '드라이브 코드');
+  await A.ctx.close(); await B.ctx.close();
+});
+
+await test('내 기기: 드라이브 연결 코드로 랩톱을 붙이면 드라이브의 작품을 받아 오고, 기기 목록 파일이 드라이브 폴더에 생긴다', async () => {
+  const A = await boot({ syncTarget: 'drive', driveClientId: 'x.apps.googleusercontent.com', autoSync: false, deviceName: '데스크톱' });
+  const files = await mockDrive(A.ctx);
+  await A.page.reload(); await A.page.waitForSelector('.ProseMirror');
+  await run(A.page, `const G = await import('/src/gdrive.js'); await G.connect();`);
+  await mkProject(A.page, [{ title: '1장', html: '<p>드라이브 작품</p>' }], '드라이브 작품');
+  await run(A.page, `await A.syncNow({ quiet: true }); const D = await import('/src/devices.js'); const G = await import('/src/gdrive.js'); await G.putDevice({ id: D.deviceId(), name: D.deviceName() });`);
+  const code = await run(A.page, `const D = await import('/src/devices.js'); return D.makeCode({ t: 'd', i: A.app.settings.driveClientId });`);
+  const B = await boot({ deviceName: '랩톱' });
+  // 같은 드라이브를 쓰도록 B에도 흉내를 걸되 파일은 A의 것을 나눈다
+  await B.ctx.addInitScript(() => { window.google = { accounts: { oauth2: { initTokenClient: (cfg) => ({ requestAccessToken: () => setTimeout(() => cfg.callback({ access_token: 'b', expires_in: 3600 }), 10) }), revoke: () => {} } } }; });
+  await B.page.reload(); await B.page.waitForSelector('.ProseMirror');
+  await B.ctx.route('https://www.googleapis.com/**', async (route) => {
+    const req = route.request(); const u = new URL(req.url()); const qq = u.searchParams.get('q') || '';
+    if (/\/files$/.test(u.pathname) && req.method() === 'GET') {
+      if (/vnd.google-apps.folder/.test(qq)) return route.fulfill({ json: { files: [{ id: 'folder1' }] } });
+      const pm = qq.match(/key='(\w+)' and value='([^']+)'/);
+      return route.fulfill({ json: { files: [...files.values()].filter((f) => (pm ? f.appProperties?.[pm[1]] === pm[2] : /\.novel\.json/.test(f.name))).map(({ body, ...f }) => f) } });
+    }
+    const idm = u.pathname.match(/\/files\/([^/]+)$/);
+    if (idm && req.method() === 'GET') return route.fulfill({ body: files.get(idm[1])?.body || '' });
+    return route.fulfill({ json: { id: 'x', modifiedTime: new Date().toISOString(), size: 1 } });
+  });
+  await B.page.evaluate(() => document.querySelector('[data-act="devices"]').click());
+  await B.page.click('#dlg [data-d=join]');
+  await B.page.fill('#dlg textarea[name=code]', code);
+  await B.page.click('#dlg [data-d=go]');
+  await B.page.waitForFunction(() => /작품 1개를 받아 왔어요/.test(document.querySelector('#devMsg').textContent), null, { timeout: 10000 });
+  assert((await run(B.page, `return (await S.listProjects()).map((p) => p.title);`)).includes('드라이브 작품'), '드라이브 작품 받기');
+  const devFile = [...files.values()].find((f) => f.appProperties?.novelDevices === '1');
+  assert(devFile && devFile.name === '기기 목록.json', '기기 목록 파일');
+  await A.ctx.close(); await B.ctx.close();
+});
+
+await test('파일 이름에 날짜: 내보내기에서 고르면 내보낸 파일·백업 파일 이름에 날짜(·시각)가 붙고, 다음에도 남는다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: '1장', html: '<p>본문</p>' }], 'Spring'); // (시험 브라우저는 한글 파일 이름을 'download'로 바꿔서 영문 제목으로)
+  const n = await run(page, `const IO = await import('/src/io/index.js'); const d = new Date(2026, 9, 16, 14, 5);
+    return [IO.withDate('봄밤.docx', 'date', d), IO.withDate('봄밤.novel.json', 'time', d), IO.withDate('봄밤.docx', 'off', d), IO.withDate('a.novel.json.gz', 'date', d)];`);
+  assert(n.join('|') === '봄밤 2026-10-16.docx|봄밤 2026-10-16 1405.novel.json|봄밤.docx|a 2026-10-16.novel.json.gz', '이름: ' + n);
+  const today = await run(page, 'return S.today();');
+  await page.evaluate(() => document.querySelector('[data-act="export"]').click());
+  await page.waitForSelector('#dlg[open] select[name=nameDate]');
+  await page.selectOption('#dlg select[name=fmt]', 'txt');
+  await page.selectOption('#dlg select[name=nameDate]', 'date');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#dlg .dlg-foot button[value=ok]')]);
+  assert(dl.suggestedFilename() === `Spring ${today}.txt`, '내보낸 이름: ' + dl.suggestedFilename());
+  const [dl2] = await Promise.all([page.waitForEvent('download'), page.evaluate(() => document.querySelector('[data-act="backup"]').click())]);
+  assert(dl2.suggestedFilename() === `Spring ${today}.novel.json`, '백업 이름: ' + dl2.suggestedFilename());
+  await page.evaluate(() => document.querySelector('[data-act="export"]').click());
+  await page.waitForSelector('#dlg[open] select[name=nameDate]');
+  assert((await page.inputValue('#dlg select[name=nameDate]')) === 'date', '고른 값이 남아야 함');
+  await ctx.close();
+});
+
+export { browser, boot, run, mkProject, typeInto, pressDialog, test, assert, results, mockGoogle };
 if (!process.env.NO_CLOSE) {
   await browser.close();
   const fail = results.filter((r) => r[1] !== '통과');

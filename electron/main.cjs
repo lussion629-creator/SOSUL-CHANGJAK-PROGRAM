@@ -4,6 +4,8 @@ const { app, BrowserWindow, shell, ipcMain, dialog, session, Menu } = require('e
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const { spawn } = require('node:child_process');
 const { CSP } = require('./csp.cjs');
 const updater = require('./updater.cjs');
 
@@ -105,6 +107,46 @@ async function saveForQuit() {
     return false;
   }
 }
+// ---------- 이 컴퓨터를 동기화 서버로 (같은 집·사무실의 다른 컴퓨터가 붙는다) ----------
+// server/server.mjs를 이 앱의 Node로 따로 띄운다. 작품은 사용자 폴더(userData/sync-server)에 둔다.
+const HOST_PORT = 8787;
+let hostProc = null, hostErr = '';
+const hostDir = () => path.join(app.getPath('userData'), 'sync-server');
+const hostCfg = () => path.join(app.getPath('userData'), 'host-server.json');
+const hostWanted = () => { try { return JSON.parse(fs.readFileSync(hostCfg(), 'utf8')).on === true; } catch { return false; } };
+function startHost() {
+  if (hostProc) return;
+  fs.mkdirSync(hostDir(), { recursive: true });
+  const script = path.join(__dirname, '..', 'server', 'server.mjs').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  hostErr = '';
+  hostProc = spawn(process.execPath, [script], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PORT: String(HOST_PORT), HOST: '0.0.0.0', DATA_DIR: hostDir(), APP_DIR: ROOT },
+    stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+  });
+  hostProc.stderr.on('data', (d) => { hostErr = (hostErr + d).slice(-400); });
+  hostProc.on('exit', (code) => { hostProc = null; if (code && !hostErr) hostErr = `서버가 멈췄어요 (${code}). ${HOST_PORT}번 포트를 다른 프로그램이 쓰고 있을 수 있어요.`; });
+}
+function stopHost() { if (hostProc) { hostProc.kill(); hostProc = null; } }
+const lanIps = () => Object.values(os.networkInterfaces()).flat().filter((n) => n && n.family === 'IPv4' && !n.internal).map((n) => n.address);
+async function hostInfo() {
+  let code = '';
+  for (let i = 0; i < 30 && hostProc && !code; i++) {
+    try { code = fs.readFileSync(path.join(hostDir(), 'access-code.txt'), 'utf8').trim(); } catch { await new Promise((r) => setTimeout(r, 100)); }
+  }
+  return { on: !!hostProc, port: HOST_PORT, code, urls: lanIps().map((ip) => `http://${ip}:${HOST_PORT}`), local: `http://localhost:${HOST_PORT}`, error: hostErr, name: os.hostname() };
+}
+ipcMain.handle('host-server', async (e, on) => {
+  if (!isApp(e.senderFrame?.url)) return null;
+  if (on === true || on === false) {
+    try { fs.writeFileSync(hostCfg(), JSON.stringify({ on })); } catch { /* 다음 실행에는 꺼짐 */ }
+    if (on) startHost(); else stopHost();
+    if (on) await new Promise((r) => setTimeout(r, 600)); // 켜지는 동안
+  }
+  return hostInfo();
+});
+ipcMain.handle('device-info', (e) => (isApp(e.senderFrame?.url) ? { name: os.hostname(), platform: process.platform } : null));
+app.on('will-quit', stopHost);
+
 // 앱 화면의 '업데이트 확인' 메뉴
 ipcMain.handle('check-update', (e) => (isApp(e.senderFrame?.url) ? updater.check(true) : null));
 ipcMain.handle('app-version', (e) => (isApp(e.senderFrame?.url) ? app.getVersion() : null));
@@ -138,9 +180,17 @@ function createWindow() {
 
   // 구글 로그인 창은 앱 안에서, 그 밖의 링크는 기본 브라우저로
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https:\/\/accounts\.google\.com\//.test(url)) return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 680, autoHideMenuBar: true } };
+    if (/^https:\/\/accounts\.google\.com\//.test(url)) {
+      // 이미 허락한 계정의 조용한 재연결(prompt=none)은 창을 보이지 않게 연다
+      const silent = /[?&]prompt=none(&|$)/.test(url);
+      return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 680, autoHideMenuBar: true, show: !silent, skipTaskbar: silent } };
+    }
     if (/^https?:\/\//.test(url)) shell.openExternal(url); // file:, 프로그램 실행 주소 등은 열지 않는다
     return { action: 'deny' };
+  });
+  // 숨은 재연결 창이 어떤 까닭으로 남아 있으면 30초 뒤 닫는다
+  win.webContents.on('did-create-window', (child, { url }) => {
+    if (/[?&]prompt=none(&|$)/.test(url || '')) setTimeout(() => { if (!child.isDestroyed()) child.close(); }, 30e3);
   });
   win.webContents.on('will-navigate', (e, url) => {
     if (!isApp(url)) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); }
@@ -204,6 +254,7 @@ if (!app.requestSingleInstanceLock()) {
     // 맥은 복사·붙여넣기(⌘C·⌘V)가 '편집' 메뉴에 달려 있어 앱·편집 메뉴만 남긴다.
     if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
     else Menu.setApplicationMenu(null);
+    if (hostWanted()) startHost();
     createWindow();
     updater.start({ getWin: () => win, beforeQuit: saveForQuit });
     app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

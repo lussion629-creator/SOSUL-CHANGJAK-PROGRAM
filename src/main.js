@@ -29,6 +29,7 @@ import { showColors, toggleComplement } from './themecolor.js';
 import { bindZoom, zoomStep } from './zoom.js';
 import { bindSynonyms, toggleSynonyms } from './synonym.js';
 import { initStash, renderStash, openStash } from './stash.js';
+import { bindDevices, showDevices } from './devices.js';
 const ACTIONS = {
   checkUpdate: () => window.desktop?.checkUpdate?.(),
   readAloud: () => R.readAloud(), readChapter: () => R.readChapter(), readSentence: () => R.readSentence(), readParagraph: () => R.readParagraph(), readExport: () => R.exportAudio(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
@@ -48,7 +49,7 @@ const ACTIONS = {
   bookPlain: () => { closeRevision(); toggleBook(!(isBookOpen() && app.settings.bookNoCh), { noCh: true }); },
   bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
   lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1), lsReset: () => setSpacing(null), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
-  drive: F.showDrive, driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport, storage: () => F.showStorage(), colors: () => showColors(), complement: () => toggleComplement(), synonyms: () => toggleSynonyms(), zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), zoomReset: () => zoomStep(0), help: () => toggleHelp(),
+  drive: F.showDrive, devices: () => showDevices(), driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport, storage: () => F.showStorage(), colors: () => showColors(), complement: () => toggleComplement(), synonyms: () => toggleSynonyms(), zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), zoomReset: () => zoomStep(0), help: () => toggleHelp(),
   renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
   addChapter: () => addChapter(), addNote: () => F.editNote(null),
 };
@@ -59,10 +60,14 @@ async function boot() {
   await loadTemplates();
   initEditor();
   initStash();
+  bindDevices();
   app.openRevision = openRevision;
   app.hooks.toolbar = () => { showSizeInBox(); showSpacingInBox(); };
   G.configure(app.settings.driveClientId);
   G.onChange(refreshSyncPill);
+  // 드라이브가 다시 이어지면 밀린 동기화를 한다
+  let wasOn = G.status().connected;
+  G.onChange((st) => { if (st.connected && !wasOn && syncBackend() === G && app.syncPending) scheduleSync(3000); wasOn = st.connected; });
   SV.configure(app.settings.syncServer);
   SV.onChange(refreshSyncPill);
 
@@ -106,6 +111,8 @@ async function boot() {
   if (syncBackend().status().connected) syncNow({ quiet: true });
   // 처음 켤 때 한 번: 원고를 어디에 저장할지 (오프라인 · 개인 서버 · 구글 드라이브)
   if (!app.settings.syncAsked) setTimeout(() => F.showStorage({ first: true }), 400);
+  // 예전에 드라이브 연결을 허락했으면 켤 때(업데이트 뒤에도) 창 없이 다시 잇는다
+  else if (syncBackend() === G) G.autoConnect().then((ok) => { if (ok) { scheduleSync(5000); } });
   registerSW();
   // 다른 곳에서 넘겨받은 파일 열기: 데스크톱 앱(연결 프로그램), 설치한 웹앱(파일 연결)
   if (window.desktop?.checkUpdate) { $('#mUpdate').hidden = false; window.desktop.version().then((v) => { if (v) $('#mVersion').textContent = `지금 ${v}`; }); }

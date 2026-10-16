@@ -113,6 +113,15 @@ export async function exportBook(format, book, opt) {
   throw new Error('지원하지 않는 형식');
 }
 
+/** 파일 이름 끝(확장자 앞)에 저장한 날짜를 붙인다. mode: 'date' 2026-10-16 · 'time' 2026-10-16 1430 · 그 밖은 그대로 */
+export function withDate(name, mode, d = new Date()) {
+  if (mode !== 'date' && mode !== 'time') return name;
+  const z = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}${mode === 'time' ? ` ${z(d.getHours())}${z(d.getMinutes())}` : ''}`;
+  const m = name.match(/^(.*?)((?:\.novel)?\.[A-Za-z0-9]+(?:\.gz)?)$/);
+  return m ? `${m[1]} ${stamp}${m[2]}` : `${name} ${stamp}`;
+}
+
 export function download(blob, name) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
