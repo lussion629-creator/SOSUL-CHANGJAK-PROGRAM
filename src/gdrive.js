@@ -14,7 +14,7 @@ let folderId = null;
 const listeners = new Set();
 // 로그인 표(1시간짜리)는 이 기기에만 둔다: 앱을 다시 켜거나 업데이트해도 남도록 localStorage에.
 // 한 번 연결을 허락했다는 표시(gd-linked)도 남겨, 표가 끝나면 창 없이 조용히 새 표를 받는다.
-const TOKEN_LS = 'gd-token', LINK_LS = 'gd-linked';
+const TOKEN_LS = 'gd-token', LINK_LS = 'gd-linked', HINT_LS = 'gd-hint'; // gd-hint: 연결한 구글 계정 주소 (계정이 여럿이어도 창 없이 고르게)
 const ls = {
   get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
   set: (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* 저장소 사용 불가 */ } },
@@ -67,9 +67,11 @@ export function connect({ silent = false } = {}) {
       let done = false;
       const fail = (e) => { if (done) return; done = true; clearTimeout(t); reject(Object.assign(e, { silent })); };
       const t = setTimeout(() => fail(new Error('구글 연결 창이 응답하지 않아요.')), silent ? 25e3 : 10 * 60e3);
+      const hint = ls.get(HINT_LS);
       const tc = google.accounts.oauth2.initTokenClient({
         client_id: clientId,
         scope: SCOPE,
+        ...(hint ? { hint } : {}),
         callback: (r) => {
           if (r.error) { fail(new Error(r.error_description || r.error)); return; }
           if (done) return;
@@ -77,9 +79,11 @@ export function connect({ silent = false } = {}) {
           token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 30) * 1000, cid: clientId };
           ls.set(TOKEN_LS, JSON.stringify(token));
           ls.set(LINK_LS, clientId);
+          lastFail = 0;
           planRefresh();
           emit();
           resolve(token);
+          if (!ls.get(HINT_LS)) rememberAccount();
         },
         error_callback: (e) => fail(new Error(e?.type === 'popup_failed_to_open' ? '구글 연결 창이 막혔어요.' : e?.message || '구글 연결 창이 닫혔습니다.')),
       });
@@ -90,42 +94,64 @@ export function connect({ silent = false } = {}) {
   return connecting;
 }
 
-// 표가 끝나기 전에 새로 받는다. 데스크톱 앱은 창이 보이지 않게 받고,
-// 브라우저는 창을 사용자가 누를 때만 열 수 있어서 다음 클릭·키 입력 때 조용히 받는다.
-let refreshT = null, gestureHooked = false;
+// 표가 끝나기 전에 새로 받는다.
+// - 데스크톱 앱: 끝나기 5분 전에 보이지 않는 창으로 받고, 잠자기에서 깨어나거나 창으로 돌아올 때도 확인한다.
+// - 브라우저: 창은 사용자가 누를 때만 열 수 있어서, 표가 10분 안에 끝나거나 끝났으면 다음 클릭·키 입력 때 조용히 받는다.
+let refreshT = null, watching = false, lastFail = 0;
+const SOON = () => (window.desktop ? 5 : 10) * 60e3;
+const needsRenew = () => status().linked && (!token || token.expires_at - Date.now() < SOON());
 function planRefresh() {
   clearTimeout(refreshT);
+  watch();
   if (!token || !window.desktop) return;
-  const wait = Math.max(30e3, token.expires_at - Date.now() - 5 * 60e3);
-  refreshT = setTimeout(() => { autoConnect().catch(() => {}); }, wait);
+  const wait = Math.max(30e3, token.expires_at - Date.now() - SOON());
+  refreshT = setTimeout(() => { if (needsRenew()) connect({ silent: true }).catch(() => { lastFail = Date.now(); emit(); }); }, wait);
 }
-function onGesture() {
-  if (gestureHooked) return;
-  gestureHooked = true;
-  const go = () => {
-    removeEventListener('pointerdown', go, true); removeEventListener('keydown', go, true);
-    gestureHooked = false;
-    if (status().linked && !status().connected) connect({ silent: true }).catch(() => emit());
+function watch() {
+  if (watching || !status().linked) return;
+  watching = true;
+  let lastTry = 0;
+  const renew = () => {
+    if (!needsRenew() || connecting || Date.now() - lastTry < 30e3) return; // 막혀도 30초에 한 번만
+    lastTry = Date.now();
+    connect({ silent: true }).catch(() => { lastFail = Date.now(); emit(); });
   };
-  addEventListener('pointerdown', go, true); addEventListener('keydown', go, true);
+  if (window.desktop) {
+    // 잠자기·절전에서 깨면 타이머가 늦으므로 창으로 돌아올 때·인터넷이 다시 될 때 확인
+    addEventListener('focus', renew);
+    addEventListener('online', renew);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) renew(); });
+  } else {
+    addEventListener('pointerdown', renew, true);
+    addEventListener('keydown', renew, true);
+  }
 }
-/** 예전에 연결을 허락했으면 창 없이 다시 연결한다. 못 하면 false (그때는 ☁ 표시를 한 번 누르면 된다) */
+/** 예전에 연결을 허락했으면 창 없이 다시 연결한다. 못 하면 false (브라우저는 다음 클릭 때 다시 해 보고, ☁ 표시를 눌러도 된다) */
 export async function autoConnect() {
   const st = status();
   if (!st.configured || !st.linked) return false;
   if (st.connected) return true;
+  watch();
+  if (Date.now() - lastFail < 60e3) return false; // 방금 실패했으면 거듭 시도하지 않는다 (막힌 창이 쌓이지 않게)
   try { await connect({ silent: true }); return true; } catch {
-    if (!window.desktop) onGesture(); // 브라우저: 다음에 누를 때 다시 해 본다
+    lastFail = Date.now();
     emit();
     return false;
   }
+}
+// 연결한 계정 주소를 기억해 둔다 (구글 계정이 여럿인 브라우저에서도 창 없이 다시 연결되게)
+async function rememberAccount() {
+  try {
+    const r = await (await api(`${API}/about?fields=user(emailAddress)`)).json();
+    if (r.user?.emailAddress) ls.set(HINT_LS, r.user.emailAddress);
+  } catch { /* 없어도 된다 */ }
 }
 
 export function disconnect() {
   if (token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(token.access_token, () => {});
   token = null; folderId = null;
   clearTimeout(refreshT);
-  ls.set(TOKEN_LS, null); ls.set(LINK_LS, null);
+  ls.set(TOKEN_LS, null); ls.set(LINK_LS, null); ls.set(HINT_LS, null);
   try { sessionStorage.removeItem(TOKEN_LS); } catch { /* 무시 */ }
   emit();
 }

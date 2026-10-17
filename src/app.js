@@ -909,7 +909,13 @@ function needReconnect() {
 }
 export function scheduleSync(delay) {
   app.syncPending = true;
-  if (!app.settings.autoSync || !syncBackend().status().connected) { needReconnect(); return; }
+  if (!app.settings.autoSync) return;
+  if (!syncBackend().status().connected) {
+    // 드라이브 표가 끝났으면 먼저 조용히 다시 받는다 (다시 연결되면 onChange가 동기화를 예약한다)
+    if (syncBackend() === G && G.status().linked) G.autoConnect().then((ok) => { if (!ok) needReconnect(); });
+    else needReconnect();
+    return;
+  }
   if (app.syncTimer) return; // 이미 예약됨
   const every = (+app.settings.syncMinutes || 5) * 60e3;
   const wait = delay ?? Math.max(10e3, pushedAt + every - Date.now());

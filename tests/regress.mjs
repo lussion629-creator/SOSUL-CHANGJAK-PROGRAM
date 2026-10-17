@@ -946,11 +946,11 @@ await test('문장 보관함: 고른 글 지우기·잘라내기·이어서 지�
 // 구글 로그인(GIS)과 드라이브 API를 흉내 낸다. 요청한 prompt 값을 window.__prompts에 남긴다
 async function mockDrive(ctx, { failSilent = false } = {}) {
   await ctx.addInitScript((failSilent) => {
-    window.__prompts = [];
+    window.__prompts = []; window.__hints = [];
     window.google = { accounts: { oauth2: {
       initTokenClient: (cfg) => ({ requestAccessToken: ({ prompt }) => {
-        window.__prompts.push(prompt);
-        setTimeout(() => (prompt === 'none' && failSilent ? cfg.error_callback({ type: 'popup_failed_to_open' }) : cfg.callback({ access_token: 'tok' + window.__prompts.length, expires_in: 3600 })), 10);
+        window.__prompts.push(prompt); window.__hints.push(cfg.hint || '');
+        setTimeout(() => (prompt === 'none' && failSilent ? cfg.error_callback({ type: 'popup_failed_to_open' }) : cfg.callback({ access_token: 'tok' + window.__prompts.length, expires_in: window.__exp || 3600 })), 10);
       } }),
       revoke: () => {},
     } } };
@@ -960,6 +960,7 @@ async function mockDrive(ctx, { failSilent = false } = {}) {
     const req = route.request();
     const u = new URL(req.url());
     const qq = u.searchParams.get('q') || '';
+    if (/\/about$/.test(u.pathname)) return route.fulfill({ json: { user: { emailAddress: 'writer@example.com' } } });
     if (/\/files$/.test(u.pathname) && req.method() === 'GET') {
       if (/vnd.google-apps.folder/.test(qq)) return route.fulfill({ json: { files: [{ id: 'folder1' }] } });
       const pm = qq.match(/key='(\w+)' and value='([^']+)'/);
@@ -1107,6 +1108,36 @@ await test('파일 이름에 날짜: 내보내기에서 고르면 내보낸 파�
   await page.evaluate(() => document.querySelector('[data-act="export"]').click());
   await page.waitForSelector('#dlg[open] select[name=nameDate]');
   assert((await page.inputValue('#dlg select[name=nameDate]')) === 'date', '고른 값이 남아야 함');
+  await ctx.close();
+});
+
+await test('드라이브: 쓰는 도중 표가 끝나도 다음 동기화 때 창 없이 다시 받아 올리고(끊김 표시 없음), 끝나기 10분 전이면 다음 클릭·키 입력 때 미리 받으며, 계정 주소를 기억해 고른다', async () => {
+  const { ctx, page } = await boot({ syncTarget: 'drive', driveClientId: 'x.apps.googleusercontent.com', autoSync: true, syncMinutes: 1 });
+  const files = await mockDrive(ctx);
+  await page.reload(); await page.waitForSelector('.ProseMirror');
+  await run(page, `const G = await import('/src/gdrive.js'); await G.connect();`);
+  await page.waitForFunction(() => localStorage.getItem('gd-hint') === 'writer@example.com');
+  await mkProject(page, [{ title: '1장', html: '<p>본문</p>' }], '끊김 시험');
+  // 표를 끝난 것으로 만들고(앱을 오래 켜 둔 상황) 글을 고친다
+  await page.evaluate(() => { window.__exp = 3600; });
+  await run(page, `const G = await import('/src/gdrive.js'); const t = JSON.parse(localStorage.getItem('gd-token')); t.expires_at = Date.now() - 1000; localStorage.setItem('gd-token', JSON.stringify(t)); G.configure('');  G.configure('x.apps.googleusercontent.com'); return G.status();`);
+  assert(!(await run(page, `return (await import('/src/gdrive.js')).status().connected;`)), '끝난 표');
+  await run(page, `A.scheduleSync(0);`);
+  await page.waitForFunction(() => window.__prompts.at(-1) === 'none');
+  await page.waitForFunction(() => /연결됨|맞춤|동기화/.test(document.querySelector('#syncState').textContent) && !/다시 연결/.test(document.querySelector('#syncState').textContent), null, { timeout: 8000 });
+  assert((await page.evaluate(() => window.__hints.at(-1))) === 'writer@example.com', '계정 주소로 고르기');
+  for (let i = 0; i < 40 && ![...files.values()].some((f) => /끊김 시험/.test(f.name || '')); i++) await page.waitForTimeout(200);
+  assert([...files.values()].some((f) => /끊김 시험/.test(f.name || '')), '다시 연결 뒤 올림: ' + [...files.values()].map((f) => f.name));
+  // 10분 안에 끝나는 표: 키를 누르면 미리 받는다
+  await page.evaluate(() => { window.__exp = 300; });
+  await run(page, `const G = await import('/src/gdrive.js'); await G.connect({ silent: true });`);
+  const n = await page.evaluate(() => window.__prompts.length);
+  await page.evaluate(() => { window.__exp = 3600; });
+  await page.mouse.click(640, 400);
+  await page.waitForFunction((n) => window.__prompts.length > n, n);
+  await page.waitForTimeout(200);
+  const left = await run(page, `return JSON.parse(localStorage.getItem('gd-token')).expires_at - Date.now();`);
+  assert(left > 50 * 60e3, '새 표 1시간: ' + left);
   await ctx.close();
 });
 
