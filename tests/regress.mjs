@@ -756,6 +756,7 @@ async function mockGoogle(ctx, { secs = 1, pov = { pov: '1인칭', narrator: '�
     let out;
     if (prompt.includes('서술 시점')) out = pov;
     else if (prompt.includes('캐스팅 감독')) out = { genre: '성장 소설', pov: '1인칭', narrator: '민준', narrationVoice: 'Charon', narrationStyle: '담담하게 회상하듯', chars: [{ name: '민준', gender: '남', voice: 'Puck', style: '열일곱 소년, 조금 높고 맑은 목소리, 빠른 말투' }, { name: '할머니', gender: '여', voice: 'Puck', style: '일흔 넘은 할머니, 느리고 갈라진 목소리, 사투리' }] };
+    else if (prompt.includes('맞춤법·띄어쓰기·문장부호')) out = { errors: prompt.includes('바램이었다') ? [{ p: 1, wrong: '안쓰럽게', right: '안쓰럽게', kind: '맞춤법' }, { p: 1, wrong: '구지 그럴', right: '굳이 그럴', kind: '맞춤법', why: '‘굳이’가 맞아요.' }] : [] };
     else if (prompt.includes('누가 말했는지')) { const n = (prompt.match(/\[Q\d+\]/g) || []).length; out = { lines: Array.from({ length: n }, (_, i) => ({ q: i + 1, speaker: i === 0 ? '나' : '할머니', gender: '여' })) }; }
     else out = {};
     r.fulfill({ json: { candidates: [{ content: { parts: [{ text: JSON.stringify(out) }] } }] } });
@@ -1138,6 +1139,61 @@ await test('드라이브: 쓰는 도중 표가 끝나도 다음 동기화 때 �
   await page.waitForTimeout(200);
   const left = await run(page, `return JSON.parse(localStorage.getItem('gd-token')).expires_at - Date.now();`);
   assert(left > 50 * 60e3, '새 표 1시간: ' + left);
+  await ctx.close();
+});
+
+await test('맞춤법 검사: 작품 전체의 틀린 곳이 장마다 한 번에 나오고(틀린 말 → 고칠 말), 다른 장도 고치기·모두 고치기·AI 검사가 되며, 흔한 오탐은 없다', async () => {
+  const { ctx, page } = await boot({ proof: true, tts: { cache: false } });
+  await mockGoogle(ctx);
+  await page.evaluate(() => localStorage.setItem('nw-gemini-key', 'AIza-test-key-0000000000'));
+  await page.reload(); await page.waitForSelector('.ProseMirror');
+  const { order } = await mkProject(page, [
+    { title: '첫 장', html: '<p>비가 왔다.그는 “어떻해, 할께.”라고 했다.</p><p>그는 실수 없이 멀거니 서서 볼때기를 긁었다.</p>' },
+    { title: '둘째 장', html: '<p>그녀는 안되요 라고 했다. 몇일 뒤였다.</p>' },
+    { title: '셋째 장', html: '<p>그것은 바램이었다. 구지 그럴 필요는 없었다.</p>' }]);
+  await page.evaluate(() => { (async () => (await import('/src/proof.js')).showProof())(); });
+  await page.waitForSelector('#dlg[open] .pf-row');
+  const rows = async () => page.$$eval('#pfList .pf-row', (els) => els.map((e) => e.querySelector('.pf-fix').textContent.replace(/\s+/g, ' ').trim()));
+  let r = await rows();
+  const heads = await page.$$eval('#pfList .pf-ch b', (els) => els.map((e) => e.textContent));
+  assert(heads.join() === '첫 장,둘째 장,셋째 장', '장 묶음: ' + heads);
+  for (const want of ['.그 → . 그', '어떻해 → 어떡해', '할께 → 할게', '되요 → 돼요', '몇일 → 며칠', '바램 → 바람']) assert(r.some((x) => x.startsWith(want)), '빠짐: ' + want + ' / ' + r.join(' | '));
+  assert(!r.some((x) => /실수|멀거|볼때/.test(x)), '오탐: ' + r.join(' | '));
+  assert(/작품 전체에서 6곳/.test(await page.textContent('#pfSum')), '요약: ' + await page.textContent('#pfSum'));
+  // 다른 장(둘째 장) 하나 고치기: 그 장 원고가 바뀌고 목록에서 빠진다
+  const k = r.findIndex((x) => x.startsWith('몇일'));
+  await (await page.$$('#pfList .pf-row'))[k].$('[data-a=fix]').then((b) => b.click());
+  await page.waitForFunction(() => ![...document.querySelectorAll('#pfList .pf-fix')].some((e) => e.textContent.startsWith('몇일')));
+  assert((await run(page, `return (await S.chaptersOf(arg)).find((c) => c.title === '둘째 장').html;`, (await run(page, 'return A.app.project.id;')))).includes('며칠 뒤'), '둘째 장 저장');
+  // AI 검사 (작품 전체): 셋째 장에서 ‘구지’를 찾는다
+  await page.click('#dlg [data-p=ai]');
+  await page.waitForFunction(() => /AI가 \d+곳을 찾았어요/.test(document.querySelector('#pfMsg').textContent));
+  r = await rows();
+  assert(r.some((x) => x.startsWith('구지 → 굳이')), 'AI 결과: ' + r.join(' | '));
+  // 원고에서 보기: 다른 장이면 그 장을 열고 그 자리를 고른다. AI가 찾은 곳도 그 장 밑줄로 남는다
+  await (await page.$$('#pfList .pf-row'))[r.findIndex((x) => x.startsWith('구지'))].$('[data-a=go]').then((b) => b.click());
+  await page.waitForFunction((id) => true, null);
+  await page.waitForTimeout(300);
+  const at = await run(page, `const e = A.app.editor; return { cur: A.app.cur, sel: e.state.doc.textBetween(e.state.selection.from, e.state.selection.to), ai: document.querySelectorAll('.ProseMirror .pf-ai').length };`);
+  assert(at.cur === order[2] && at.sel === '구지' && at.ai === 1, '셋째 장으로: ' + JSON.stringify(at));
+  // 이 장만 보기
+  await page.click('#dlg label:has(input[name=scope][value=cur])');
+  assert((await page.$$('#pfList .pf-ch')).length === 0 && (await rows()).every((x) => !/어떻해|되요/.test(x)), '이 장만: ' + (await rows()).join(' | '));
+  await page.click('#dlg label:has(input[name=scope][value=all])');
+  // 모두 고치기: 모든 장이 고쳐지고, 고치기 전 원고는 버전 기록에
+  await page.click('#dlg [data-p=fixall]');
+  await page.waitForFunction(() => /곳을 고쳤어요/.test(document.querySelector('#pfMsg').textContent));
+  const pid = await run(page, 'return A.app.project.id;');
+  await run(page, 'await A.saveNow();');
+  const chs = await run(page, `return (await S.chaptersOf(arg)).map((c) => c.title + ':' + c.html);`, pid);
+  const cur = (await run(page, `return (await S.chaptersOf(arg)).find((c) => c.title === '첫 장').html;`, pid));
+  assert(cur.includes('왔다. 그는') && cur.includes('어떡해') && cur.includes('할게') && cur.includes('실수 없이'), '첫 장: ' + cur);
+  assert(chs.some((c) => c.startsWith('둘째 장') && c.includes('돼요')), '둘째 장: ' + chs);
+  assert(chs.some((c) => c.startsWith('셋째 장') && c.includes('바람이었다') && c.includes('굳이 그럴')), '셋째 장(AI 포함): ' + chs);
+  const snaps = await run(page, `return (await S.snapshotsOf(arg)).map((s) => s.label);`, order[2]);
+  assert(snaps.includes('맞춤법 모두 고치기 전'), '버전 기록: ' + snaps);
+  assert(/걸리는 곳이 없어요/.test(await page.textContent('#pfList')), '다 고친 뒤 빈 목록');
+  // 셋째 장을 열어도 남은 것 없음, 다른 장으로 가기 동작
   await ctx.close();
 });
 

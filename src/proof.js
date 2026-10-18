@@ -4,8 +4,12 @@
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { closeHistory } from '@tiptap/pm/history';
+import { EditorState } from '@tiptap/pm/state';
+import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
+import { getHTMLFromFragment } from '@tiptap/core';
+import { parseHtml } from './sanitize.js';
 import * as S from './store.js';
-import { app, saveSettings } from './app.js';
+import { app, saveSettings, openChapter, saveNow, renderBinder } from './app.js';
 import { $, h, toast, toastAction, dialog, symRails } from './ui.js';
 import { scheduleRail } from './annotate.js';
 import { applyPageView, isPageView } from './pageview.js';
@@ -63,6 +67,12 @@ const WORDS = [
   ['부숴지', '부서지', ''],
   ['뒤치닥거리', '뒤치다꺼리', ''],
   ['([있없었았였했겠])슴(?![니다])', '$1음', '‘-음’으로 써요.'],
+  ['됀', '된', '‘되다’에 ‘-ㄴ’이 붙으면 ‘된’이에요.'],
+  ['쫒', '쫓', '‘쫓다’가 맞아요.'],
+  ['어의(가 ?|도 ?)없', '어이$1없', '‘어이없다’예요. (‘어의’는 임금의 의사)'],
+  ['(?<![가-힣])(내|네|제|니|너)꺼(?=[야예다요지니라]|[^가-힣]|$)', '$1 거', '‘것’을 말하는 ‘거’는 띄어 쓰고 예사소리로 써요.'],
+  ['안절부절(?!못)(하|했|한|해)', '안절부절못$1', '‘안절부절못하다’가 맞아요.'],
+  ['([가-힣])지않', '$1지 않', '‘-지 않다’는 띄어 써요.'],
 ];
 const words = WORDS.map(([re, to, why]) => ({ re: new RegExp(re, 'g'), to, why }));
 
@@ -94,9 +104,9 @@ export const RULES = [
       return { fix: [to], why: m[2] === '꺼' ? '‘것’을 말하는 ‘거’는 띄어 쓰고 예사소리로 써요.' : '소리는 [께]로 나도 ‘-ㄹ게’, ‘-ㄹ걸’로 써요.' };
     }) },
   { id: 'spacing', kind: 'sp', label: '띄어쓰기 (자주 붙여 쓰는 말)', hint: '할수있다 → 할 수 있다 · 갈때 → 갈 때 · 할거야 → 할 거야 · 것같다 → 것 같다', find: (t) => [
-    ...each(t, /([가-힣])수 ?(있|없)/g, (m) => (jong(m[1]) !== RIEUL || /[말술]/.test(m[1]) ? null : { fix: [`${m[1]} 수 ${m[2]}`], why: '‘수’는 띄어 써요.' })),
-    ...each(t, /([가-힣])때(?!문)/g, (m) => (jong(m[1]) !== RIEUL || /[물쓸]/.test(m[1]) ? null : { fix: [`${m[1]} 때`], why: '‘때’는 띄어 써요.' })),
-    ...each(t, /([가-힣])거(?=야|예요|에요|다|면|라|니|지|든|였)/g, (m) => (jong(m[1]) !== RIEUL || /[설]/.test(m[1]) ? null : { fix: [`${m[1]} 거`], why: '‘거(것)’는 띄어 써요.' })),
+    ...each(t, /([가-힣])수 ?(있|없)/g, (m) => (jong(m[1]) !== RIEUL || /[말술실별홀일골철결멸필솔]/.test(m[1]) ? null : { fix: [`${m[1]} 수 ${m[2]}`], why: '‘수’는 띄어 써요.' })),
+    ...each(t, /([가-힣])때(?!문|기|리)/g, (m) => (jong(m[1]) !== RIEUL || /[물쓸볼골]/.test(m[1]) ? null : { fix: [`${m[1]} 때`], why: '‘때’는 띄어 써요.' })),
+    ...each(t, /([가-힣])거(?=야|예요|에요|다|면|라|니|지|든|였)/g, (m) => (jong(m[1]) !== RIEUL || /[설멀별얼]/.test(m[1]) ? null : { fix: [`${m[1]} 거`], why: '‘거(것)’는 띄어 써요.' })),
     ...each(t, /것같/g, () => ({ fix: ['것 같'], why: '‘같다’는 띄어 써요.' })),
   ] },
   { id: 'quotePair', kind: 'pn', label: '따옴표 짝', hint: '여는 따옴표만 있거나 닫는 따옴표만 있을 때', find: (t) => {
@@ -160,7 +170,7 @@ const ignored = () => new Set(app.project?.proofIgnore || []);
 // 문단 하나 검사 (결과는 문단 노드마다 기억: 바뀌지 않은 문단은 다시 보지 않는다)
 let memo = new WeakMap();
 let memoSig = '';
-function checkText(text) {
+export function checkText(text) {
   const off = offRules(), ign = ignored();
   const out = [];
   for (const r of RULES) {
@@ -187,6 +197,68 @@ function issuesOf(doc) {
     return false;
   });
   return out;
+}
+
+// ---------- 장마다 검사 (작품 전체 목록용) ----------
+const docOf = (html) => PMDOMParser.fromSchema(app.editor.schema).parse(parseHtml(html || ''));
+const blocksOf = (doc) => {
+  const out = [];
+  doc.descendants((n, pos) => { if (!n.isTextblock) return true; out.push({ pos: pos + 1, text: n.textBetween(0, n.content.size, null, '￼') }); return false; });
+  return out;
+};
+// AI가 찾은 곳은 장마다 ‘문단 글 + 그 안의 자리’로 기억한다: 다른 문단을 고치거나 장을 옮겨도 남고, 그 문단이 바뀌면 버린다
+const aiByCh = new Map();
+function toStored(list, doc) {
+  return list.map((x) => {
+    try {
+      const $p = doc.resolve(x.from);
+      const b = $p.parent;
+      if (!b.isTextblock) return null;
+      return { ...x, para: b.textBetween(0, b.content.size, null, '￼'), off: x.from - $p.start(), len: x.to - x.from };
+    } catch { return null; }
+  }).filter(Boolean);
+}
+function resolveAi(list, doc) {
+  if (!list?.length) return [];
+  const blocks = blocksOf(doc);
+  return list.map((x) => {
+    const b = blocks.find((y) => y.text === x.para && y.text.slice(x.off, x.off + x.len) === x.word);
+    return b ? { ...x, from: b.pos + x.off, to: b.pos + x.off + x.len } : null;
+  }).filter(Boolean);
+}
+const mergeAi = (rules, ai) => [...rules.filter((x) => !ai.some((y) => x.from < y.to && y.from < x.to)), ...ai].sort((a, b) => a.from - b.from);
+// 장 하나의 걸린 곳: 지금 장은 편집기에서, 다른 장은 저장된 원고에서
+function chapterIssues(id) {
+  if (id === app.cur) return { doc: app.editor.state.doc, list: current() };
+  const doc = docOf(app.chapters.get(id)?.html);
+  return { doc, list: mergeAi(issuesOf(doc), resolveAi(aiByCh.get(id), doc)) };
+}
+// 다른 장에서 고치기: 원고를 고쳐 저장한다 (모두 고치기면 고치기 전 원고를 버전 기록에)
+async function fixInChapter(id, items, label) {
+  const c = app.chapters.get(id);
+  if (!c) return 0;
+  const doc = docOf(c.html);
+  const ai = resolveAi(aiByCh.get(id), doc);
+  const tr = EditorState.create({ doc, schema: app.editor.schema }).tr;
+  const done = new Set();
+  for (const { x, to } of [...items].sort((a, b) => b.x.from - a.x.from)) {
+    if (tr.doc.textBetween(x.from, x.to, '\n', '￼') !== x.word) continue;
+    if (to) tr.insertText(to, x.from, x.to); else tr.delete(x.from, x.to);
+    done.add(`${x.from}:${x.to}`);
+  }
+  if (!done.size) return 0;
+  const keep = ai.filter((y) => !done.has(`${y.from}:${y.to}`)).map((y) => ({ ...y, from: tr.mapping.map(y.from, 1), to: tr.mapping.map(y.to, -1) }))
+    .filter((y) => y.to > y.from && tr.doc.textBetween(y.from, y.to, '\n', '￼') === y.word);
+  const before = c.html;
+  try {
+    if (label) await S.addSnapshot(c, 'safety', label);
+    c.html = getHTMLFromFragment(tr.doc.content, app.editor.schema);
+    c._count = null; c._paras = undefined; c.updated = Date.now();
+    await S.putChapter(c);
+  } catch (e) { c.html = before; throw e; }
+  app.states.delete(id);
+  aiByCh.set(id, toStored(keep, tr.doc));
+  return done.size;
 }
 
 // ---------- 편집기 표시 ----------
@@ -339,7 +411,11 @@ function apply(x, to) {
   recheck();
   return true;
 }
-async function ignore(x) {
+async function ignore(x, ch = app.cur) {
+  if (x.ai && ch !== app.cur) {
+    aiByCh.set(ch, (aiByCh.get(ch) || []).filter((y) => !(y.para !== undefined && y.word === x.word && y.off === x.off && y.para === x.para)));
+    return;
+  }
   if (x.ai) {
     const ed = app.editor;
     ed.view.dispatch(ed.state.tr.setMeta(key, { ai: key.getState(ed.state).ai.filter((y) => y !== x && !(y.from === x.from && y.to === x.to)) }));
@@ -417,9 +493,7 @@ function updateCount() {
 }
 
 // ---------- AI 검사 ----------
-async function aiCheck({ signal, onProgress } = {}) {
-  const ed = app.editor;
-  const doc = ed.state.doc;
+async function aiCheck(doc, { signal, onProgress } = {}) {
   const paras = [];
   doc.descendants((node, pos) => {
     if (!node.isTextblock) return true;
@@ -472,29 +546,39 @@ ${ch.map((p, i) => `[${i + 1}] ${p.text}`).join('\n')}`;
 }
 
 // ---------- 교정 목록 창 ----------
+// 검사하면 틀린 곳을 한 번에 모두 보여 준다: 작품 전체(장마다 묶어서) 또는 이 장.
+// 줄마다 원고 속 자리에 ‘틀린 말 → 고칠 말’을 그대로 보여 주고, 하나씩 또는 한꺼번에 고친다.
+const KINDS = { sp: '맞춤법', space: '띄어쓰기', pn: '문장부호' };
+const kindOf = (x) => (x.ai ? (x.label === '띄어쓰기' ? 'space' : x.kind) : x.rule === 'spacing' ? 'space' : x.kind);
 export async function showProof() {
   closePop();
   if (!isOn()) setProof(true);
   recheck();
   let busy = null;
+  const many = (app.project?.order.length || 0) > 1;
+  let scope = many ? app.settings.proofScope || 'all' : 'cur';
   const r = await dialog({
-    title: '맞춤법·문장부호 교정',
+    title: '맞춤법·문장부호 검사',
     wide: true,
     body: `<div class="proof">
       <div class="proof-top">
-        <label class="check"><input type="checkbox" name="on" ${isOn() ? 'checked' : ''}> <b>교정 모드</b> <small data-kbd="proof">Ctrl+Alt+K</small></label>
-        <label class="check"><input type="checkbox" name="auto" ${autoOn() ? 'checked' : ''}> 자동 고침 쓰기</label>
-        <label class="check"><input type="checkbox" name="rail" ${app.settings.proofRail !== false ? 'checked' : ''}> 왼쪽 여백에 고칠 말 보이기</label>
+        ${many ? `<div class="seg" role="radiogroup" aria-label="검사 범위"><label><input type="radio" name="scope" value="all" ${scope === 'all' ? 'checked' : ''}> 작품 전체</label><label><input type="radio" name="scope" value="cur" ${scope === 'cur' ? 'checked' : ''}> 이 장만</label></div>` : ''}
         <span class="grow"></span>
-        <button type="button" class="small" data-p="fixall">수동 고칠 곳 제안대로 모두 고치기</button>
+        <button type="button" class="small primary" data-p="fixall">제안대로 모두 고치기</button>
       </div>
-      <div class="proof-ai"><button type="button" class="small" data-p="ai">AI 맞춤법 검사 (이 장)</button><span class="hint">AI가 맞춤법·띄어쓰기·문장부호 틀림만 찾아요. 문장·문체는 고치지 않아요.</span><span class="grow"></span><span class="ai-now">${h(aiLabel())}</span><button type="button" class="small ghost" data-p="aiset">바꾸기…</button></div>
+      <div id="pfSum" class="pf-sum" aria-live="polite"></div>
+      <div class="proof-ai"><button type="button" class="small" data-p="ai">AI로 더 꼼꼼히 검사</button><span class="hint">규칙이 못 잡는 맞춤법·띄어쓰기·문장부호 틀림을 AI가 찾아요. 문장·문체는 고치지 않아요.</span><span class="grow"></span><span class="ai-now">${h(aiLabel())}</span><button type="button" class="small ghost" data-p="aiset">바꾸기…</button></div>
       <p id="pfMsg" class="hint" aria-live="polite" style="margin:0"></p>
       <div id="pfList" class="proof-list"></div>
       <div id="pfDone" class="proof-done"></div>
-      <details class="proof-rules" ${app.settings.proofRulesOpen ? 'open' : ''}><summary>규칙마다 자동 고침 · 수동 고침 · 끄기</summary>
+      <details class="proof-rules" ${app.settings.proofRulesOpen ? 'open' : ''}><summary>설정 · 규칙마다 자동 고침 · 수동 고침 · 끄기</summary>
+        <div class="proof-opts">
+          <label class="check"><input type="checkbox" name="on" ${isOn() ? 'checked' : ''}> 쓰는 동안 밑줄 긋기 (교정 모드) <small data-kbd="proof">Ctrl+Alt+K</small></label>
+          <label class="check"><input type="checkbox" name="auto" ${autoOn() ? 'checked' : ''}> 자동 고침 쓰기</label>
+          <label class="check"><input type="checkbox" name="rail" ${app.settings.proofRail !== false ? 'checked' : ''}> 원고 옆 여백에 고칠 말 카드 보이기</label>
+        </div>
         <div class="proof-rule-grid">${RULES.map((x) => `<div class="proof-rule"><span>${h(x.label)} <small class="hint">${h(x.hint)}</small></span><select data-rule="${x.id}" aria-label="${h(x.label)}">${MODES.map(([v, l]) => `<option value="${v}" ${modeOf(x.id) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`).join('')}</div>
-        <p class="hint" style="margin:8px 0 0"><b>자동 고침</b>은 쓰다가 손을 떼면 알아서 고쳐요 (지금 쓰는 낱말은 건드리지 않고, Ctrl+Z로 되돌린 곳은 다시 고치지 않아요). <b>수동 고침</b>(기본)은 밑줄과 왼쪽 여백 카드로 보여 주고 직접 고쳐요. 고칠 말이 둘 이상이거나 AI가 찾은 곳은 늘 수동이에요. 자동으로 고친 곳은 여백 카드나 이 창에서 언제든 되돌릴 수 있어요.</p>
+        <p class="hint" style="margin:8px 0 0"><b>자동 고침</b>은 쓰다가 손을 떼면 알아서 고쳐요 (지금 쓰는 낱말은 건드리지 않고, Ctrl+Z로 되돌린 곳은 다시 고치지 않아요). <b>수동 고침</b>(기본)은 밑줄과 이 목록으로 보여 주고 직접 고쳐요. 고칠 말이 둘 이상이거나 AI가 찾은 곳은 늘 수동이에요.</p>
         <p class="hint" style="margin:6px 0 0">이 작품에서 무시한 말: <span id="pfIgn"></span></p>
         <div class="proof-auto-acts"><button type="button" class="small" data-p="manual">모든 규칙을 수동 고침으로</button></div>
       </details>
@@ -503,79 +587,145 @@ export async function showProof() {
     onOpen: (f) => {
       f.querySelector('.dlg-foot button[value=aiset]').hidden = true;
       const msg = $('#pfMsg');
-      const ctx = (x) => {
-        const d = app.editor.state.doc;
-        const a = Math.max(0, x.from - 14), b = Math.min(d.content.size, x.to + 14);
-        const pre = d.textBetween(a, x.from, ' ', ' '), post = d.textBetween(x.to, b, ' ', ' ');
-        return `${h(pre)}<mark class="pf-${x.kind}">${h(x.word.trim() ? x.word : '␣'.repeat(x.word.length || 1))}</mark>${h(post)}`;
+      // 원고 속 자리: 앞뒤 글 + 틀린 말(지움) + 고칠 말(넣음)
+      const ctx = (doc, x) => {
+        const a = Math.max(0, x.from - 18), b = Math.min(doc.content.size, x.to + 18);
+        const pre = doc.textBetween(a, x.from, ' ', ' '), post = doc.textBetween(x.to, b, ' ', ' ');
+        const fix = x.fix[0];
+        return `${a > 0 ? '…' : ''}${h(pre)}<del class="pf-${x.kind}">${h(x.word.trim() ? x.word : '␣'.repeat(x.word.length || 1))}</del>${fix != null && fix !== '' ? `<ins>${h(fix.trim() ? fix : '␣')}</ins>` : ''}${h(post)}${b < doc.content.size ? '…' : ''}`;
       };
+      let groups = [];
       const draw = () => {
-        const list = current();
-        const fixable = list.filter((x) => x.fix.length);
+        const ids = scope === 'all' ? app.project.order : [app.cur];
+        groups = ids.map((id) => ({ id, title: app.chapters.get(id)?.title || '', ...chapterIssues(id) }));
+        const all = groups.flatMap((g) => g.list);
+        const fixable = all.filter((x) => x.fix.length);
         f.querySelector('[data-p=fixall]').disabled = !fixable.length;
-        $('#pfList').innerHTML = list.length
-          ? list.map((x, i) => `<div class="pf-row" data-i="${i}">
-              <span class="pf-k pp-${x.kind}">${h(kindName(x))}</span>
-              <span class="pf-ctx" data-a="go" tabindex="0" title="원고에서 보기">${ctx(x)}</span>
-              <span class="pf-act">${x.fix.map((t, k) => `<button type="button" class="small" data-a="fix" data-k="${k}" title="${h(x.why)}">→ ${h(t === '' ? '지우기' : t.trim() ? t : '빈칸 하나')}</button>`).join('')}<button type="button" class="small ghost" data-a="ign" title="${x.ai ? '이번만 무시' : '이 작품에서 무시'}">무시</button></span>
-              ${x.why ? `<small class="pf-why">${h(x.why)}</small>` : ''}</div>`).join('')
-          : `<p class="proof-empty">${isOn() ? '걸리는 곳이 없어요.' : '교정이 꺼져 있어요.'}</p>`;
+        f.querySelector('[data-p=fixall]').textContent = fixable.length ? `제안대로 모두 고치기 (${fixable.length}곳)` : '제안대로 모두 고치기';
+        const cnt = {};
+        for (const x of all) cnt[kindOf(x)] = (cnt[kindOf(x)] || 0) + 1;
+        const nAi = all.filter((x) => x.ai).length;
+        $('#pfSum').innerHTML = all.length
+          ? `<b>${scope === 'all' ? '작품 전체' : '이 장'}에서 ${all.length}곳</b>${Object.entries(KINDS).filter(([k]) => cnt[k]).map(([k, l]) => `<span class="pf-chip pp-${k === 'space' ? 'sp' : k}">${l} ${cnt[k]}</span>`).join('')}${nAi ? `<span class="pf-chip pf-chip-ai">AI가 찾은 곳 ${nAi}</span>` : ''}`
+          : `<b>${isOn() ? '걸리는 곳이 없어요.' : '교정이 꺼져 있어요.'}</b>`;
+        let n = 0;
+        $('#pfList').innerHTML = all.length ? groups.filter((g) => g.list.length).map((g, gi) => `
+          ${ids.length > 1 ? `<div class="pf-ch"><b>${h(g.title || '제목 없는 장')}</b><span>${g.list.length}곳</span>${g.id === app.cur ? '<small>지금 장</small>' : ''}</div>` : ''}
+          ${g.list.map((x, i) => `<div class="pf-row" data-g="${groups.indexOf(g)}" data-i="${i}">
+              <span class="pf-n">${++n}</span>
+              <span class="pf-k pp-${x.kind}">${h(x.ai ? 'AI · ' + (x.label || KINDS[kindOf(x)]) : KINDS[kindOf(x)])}</span>
+              <span class="pf-ctx" data-a="go" tabindex="0" title="원고에서 보기">${ctx(g.doc, x)}</span>
+              <span class="pf-act">${x.fix.map((t, k) => `<button type="button" class="small${k === 0 ? ' primary' : ''}" data-a="fix" data-k="${k}">${x.fix.length > 1 ? h(vis(t)) + '로' : '고치기'}</button>`).join('')}<button type="button" class="small ghost" data-a="ign" title="${x.ai ? '이번만 무시' : '이 작품에서 무시'}">무시</button></span>
+              <span class="pf-fix"><del>${h(vis(x.word))}</del> → ${x.fix.length ? x.fix.map((t) => `<ins>${h(vis(t))}</ins>`).join(' 또는 ') : '<i>직접 고쳐 주세요</i>'}${x.why ? ` <small class="pf-why">${h(x.why)}</small>` : ''}</span>
+            </div>`).join('')}`).join('')
+          : `<p class="proof-empty">${isOn() ? '걸리는 곳이 없어요. 👍' : '교정이 꺼져 있어요.'}</p>`;
         $('#pfIgn').textContent = (app.project.proofIgnore || []).map((x) => x.split(':').slice(1).join(':')).join(', ') || '없음';
         const done = autoFixed().sort((a, b) => a.from - b.from);
         $('#pfDone').innerHTML = done.length ? `<div class="pd-head"><b>이 장에서 자동으로 고친 곳 ${done.length}곳</b><button type="button" class="small" data-p="revertAll">모두 되돌리기</button><button type="button" class="small ghost" data-p="keepAll">모두 확인</button></div>
           ${done.map((r, i) => `<div class="pd-row" data-d="${i}"><span class="pd-fix"><del>${h(vis(r.word))}</del> → <ins>${h(vis(r.fix))}</ins></span><small class="hint">${h(RULES.find((x) => x.id === r.rule)?.label || '')}</small><button type="button" class="small" data-p="revert">되돌리기</button></div>`).join('')}` : '';
         f._done = done;
-        f._list = list;
       };
       draw();
+      // 원고에서 보기: 다른 장이면 그 장을 연다
+      const go = async (g, x) => {
+        if (g.id !== app.cur && !(await openChapter(g.id))) return null;
+        const cur = current().find((y) => y.from === x.from && y.to === x.to && y.word === x.word) || x;
+        app.editor.chain().setTextSelection({ from: cur.from, to: cur.to }).scrollIntoView().run();
+        return cur;
+      };
       f.addEventListener('change', (e) => {
+        if (e.target.name === 'scope') { scope = e.target.value; app.settings.proofScope = scope; saveSettings(); msg.textContent = ''; draw(); }
         if (e.target.name === 'on') { setProof(e.target.checked); draw(); }
         if (e.target.name === 'auto') { app.settings.proofAuto = e.target.checked; saveSettings(); }
         if (e.target.name === 'rail') { app.settings.proofRail = e.target.checked; saveSettings(); scheduleProofRail(0); }
         if (e.target.dataset.rule) { setMode(e.target.dataset.rule, e.target.value); draw(); }
       });
       f.querySelector('.proof-rules').addEventListener('toggle', (e) => { app.settings.proofRulesOpen = e.target.open; saveSettings(); });
+      f.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches('.pf-ctx')) { e.preventDefault(); e.target.click(); } });
       f.addEventListener('click', async (e) => {
         const b = e.target.closest('[data-a], [data-p]');
         if (!b) return;
         const row = b.closest('.pf-row');
-        const x = row && f._list[+row.dataset.i];
-        if (b.dataset.a === 'fix') { apply(x, x.fix[+b.dataset.k]); draw(); }
-        if (b.dataset.a === 'ign') { await ignore(x); draw(); }
-        if (b.dataset.a === 'go') {
-          const ed = app.editor;
-          ed.chain().setTextSelection({ from: x.from, to: x.to }).scrollIntoView().run();
-        }
+        const g = row && groups[+row.dataset.g];
+        const x = g && g.list[+row.dataset.i];
+        try {
+          if (b.dataset.a === 'fix') {
+            const to = x.fix[+b.dataset.k];
+            if (g.id === app.cur) apply(x, to);
+            else if (!(await fixInChapter(g.id, [{ x, to }]))) msg.textContent = '그 사이에 글이 바뀌었어요.';
+            draw(); return;
+          }
+          if (b.dataset.a === 'ign') { await ignore(x, g.id); draw(); return; }
+          if (b.dataset.a === 'go') { await go(g, x); draw(); return; }
+        } catch (err) { msg.textContent = '✕ ' + err.message; return; }
         if (b.dataset.p === 'revert') { revertFixes([f._done[+b.closest('.pd-row').dataset.d]]); draw(); return; }
         if (b.dataset.p === 'revertAll') { const n = revertFixes(f._done); msg.textContent = n ? `${n}곳을 원래대로 되돌렸어요.` : ''; draw(); return; }
         if (b.dataset.p === 'keepAll') { keepFixes(f._done); draw(); return; }
         if (b.dataset.p === 'manual') { allManual(); f.querySelectorAll('select[data-rule]').forEach((sel) => { sel.value = modeOf(sel.dataset.rule); }); msg.textContent = '모든 규칙을 수동 고침으로 바꿨어요. 이제 저절로 고치지 않아요.'; draw(); return; }
         if (b.dataset.p === 'aiset') { f.requestSubmit(f.querySelector('.dlg-foot button[value=aiset]')); return; }
         if (b.dataset.p === 'fixall') {
-          const list = current().filter((y) => y.fix.length).sort((p, q) => q.from - p.from);
-          const ed = app.editor;
-          const tr = ed.state.tr;
-          let n = 0;
-          for (const y of list) {
-            if (tr.doc.textBetween(y.from, y.to, '\n', '￼') !== y.word) continue;
-            if (y.fix[0]) tr.insertText(y.fix[0], y.from, y.to); else tr.delete(y.from, y.to);
-            n++;
+          b.disabled = true;
+          let n = 0, chs = 0;
+          const failed = [];
+          const { safetyPoint } = await import('./safety.js');
+          for (const g of groups) {
+            const list = g.list.filter((y) => y.fix.length);
+            if (!list.length) continue;
+            try {
+              if (g.id === app.cur) {
+                await safetyPoint('맞춤법 모두 고치기 전');
+                const ed = app.editor;
+                const tr = ed.state.tr;
+                let k = 0;
+                for (const y of [...list].sort((p, q) => q.from - p.from)) {
+                  if (tr.doc.textBetween(y.from, y.to, '\n', '￼') !== y.word) continue;
+                  if (y.fix[0]) tr.insertText(y.fix[0], y.from, y.to); else tr.delete(y.from, y.to);
+                  k++;
+                }
+                if (k) ed.view.dispatch(tr);
+                recheck();
+                n += k; if (k) chs++;
+              } else {
+                if (!chs && !(await saveNow())) throw new Error('지금 장을 저장하지 못했어요.');
+                const k = await fixInChapter(g.id, list.map((y) => ({ x: y, to: y.fix[0] })), '맞춤법 모두 고치기 전');
+                n += k; if (k) chs++;
+              }
+            } catch (err) { failed.push(g.title); console.warn(err); }
           }
-          if (n) ed.view.dispatch(tr);
-          recheck(); draw();
-          msg.textContent = n ? `${n}곳을 고쳤어요. 마음에 안 들면 Ctrl+Z로 한 번에 되돌릴 수 있어요.` : '';
+          if (chs > 1 || groups.some((g) => g.id !== app.cur)) renderBinder();
+          draw();
+          b.disabled = false;
+          msg.textContent = (n ? `${chs > 1 ? `${chs}개 장 ` : ''}${n}곳을 고쳤어요. 고치기 전 원고는 버전 기록에 남겼어요. (지금 장은 Ctrl+Z로도 되돌릴 수 있어요)` : '')
+            + (failed.length ? ` ${failed.join(', ')}은(는) 저장하지 못해 고치지 않았어요.` : '');
+          return;
         }
         if (b.dataset.p === 'ai') {
           const miss = aiMissing();
           if (miss) { msg.textContent = miss; return; }
           busy?.abort(); busy = new AbortController();
           b.disabled = true;
-          msg.textContent = 'AI가 맞춤법·띄어쓰기·문장부호를 보는 중…';
+          const ids = scope === 'all' ? app.project.order : [app.cur];
+          let total = 0;
           try {
-            const ai = await aiCheck({ signal: busy.signal, onProgress: (k, n) => { msg.textContent = `AI가 맞춤법·띄어쓰기·문장부호를 보는 중…${n > 1 ? ` (${k + 1}/${n})` : ''}`; } });
-            app.editor.view.dispatch(app.editor.state.tr.setMeta(key, { ai }));
+            for (let c = 0; c < ids.length; c++) {
+              const id = ids[c];
+              const title = app.chapters.get(id)?.title || '';
+              const say = (k, n) => { msg.textContent = `AI가 검사하는 중… ${ids.length > 1 ? `${title} (${c + 1}/${ids.length}장)` : ''}${n > 1 ? ` ${k + 1}/${n}` : ''}`; };
+              say(0, 1);
+              if (id === app.cur) {
+                const ai = await aiCheck(app.editor.state.doc, { signal: busy.signal, onProgress: say });
+                app.editor.view.dispatch(app.editor.state.tr.setMeta(key, { ai }).setMeta('addToHistory', false));
+                total += ai.length;
+              } else {
+                const doc = docOf(app.chapters.get(id)?.html);
+                const ai = await aiCheck(doc, { signal: busy.signal, onProgress: say });
+                aiByCh.set(id, toStored(ai, doc));
+                total += ai.length;
+              }
+              draw();
+            }
             updateCount(); draw();
-            msg.textContent = ai.length ? `AI가 ${ai.length}곳을 더 찾았어요 (‘AI’ 표시). 맞는지 한 번씩 확인해 주세요.` : 'AI가 더 찾은 곳은 없어요.';
+            msg.textContent = total ? `AI가 ${total}곳을 찾았어요 (‘AI’ 표시). 맞는지 한 번씩 확인해 주세요.` : 'AI가 더 찾은 곳은 없어요.';
           } catch (err) { if (err.name !== 'AbortError') msg.textContent = '✕ ' + err.message; }
           b.disabled = false;
         }
@@ -702,10 +852,16 @@ export function bindProof() {
   app.editor.registerPlugin(plugin);
   bindRail();
   app.editor.view.dom.setAttribute('spellcheck', isOn() ? 'false' : 'true');
-  app.editor.on('transaction', ({ transaction }) => { trackAuto(transaction); if (transaction.getMeta(key)) updateCount(); });
+  app.editor.on('transaction', ({ transaction }) => {
+    trackAuto(transaction);
+    if (transaction.getMeta(key)) updateCount();
+    // 지금 장에서 AI가 찾은 곳을 장마다 기억해 둔다 (장을 열 때 원고를 갈아 끼우는 변경은 빼고)
+    const ai = key.getState(app.editor.state)?.ai || [];
+    if (app.cur && !transaction.getMeta('preventUpdate') && (transaction.getMeta(key) || (transaction.docChanged && ai.length))) aiByCh.set(app.cur, toStored(ai, app.editor.state.doc));
+  });
   app.hooks.afterOpen.push(() => {
     closePop();
-    app.editor.view.dispatch(app.editor.state.tr.setMeta(key, { clearAi: true }).setMeta('addToHistory', false));
+    app.editor.view.dispatch(app.editor.state.tr.setMeta(key, { ai: resolveAi(aiByCh.get(app.cur), app.editor.state.doc) }).setMeta('addToHistory', false).setMeta('preventUpdate', true));
     updateCount();
     scheduleProofRail(80);
   });
