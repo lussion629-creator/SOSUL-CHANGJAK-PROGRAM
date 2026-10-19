@@ -20,7 +20,7 @@ const jong = (ch) => { const c = (ch || '').charCodeAt(0) - 0xac00; return c >= 
 const RIEUL = 8; // 받침 ㄹ
 // 자주 틀리는 말: [틀린 꼴(정규식 문자열), 고칠 말, 까닭]
 const WORDS = [
-  ['몇 ?일(?![본])', '며칠', '‘몇 일’이 아니라 ‘며칠’로 써요.'],
+  ['몇 ?일(?![본정자꾼손행당상반원용대품과화기터감생요])', '며칠', '‘몇 일’이 아니라 ‘며칠’로 써요.'],
   ['어떻해', '어떡해', '‘어떻게 해’를 줄이면 ‘어떡해’예요.'],
   ['어떻하', '어떡하', '‘어떻게 하’를 줄이면 ‘어떡하’예요.'],
   ['왠일', '웬일', '‘어찌 된 일’은 ‘웬일’이에요.'],
@@ -29,9 +29,9 @@ const WORDS = [
   ['금새(?![가-힣])', '금세', '‘금시에’를 줄인 말은 ‘금세’예요.'],
   ['오랫만', '오랜만', '‘오래간만’을 줄이면 ‘오랜만’이에요.'],
   ['설겆이', '설거지', ''],
-  ['희안', '희한', ''],
+  ['희안(?=[하한해했할함히스])', '희한', ''],
   ['어의없', '어이없', ''],
-  ['역활', '역할', ''],
+  ['역활(?![동성력기약용])', '역할', ''],
   ['건내(?=[주준줬다며고는])', '건네', '‘건네다’가 맞아요.'],
   ['깨끗히', '깨끗이', '‘ㅅ’ 받침 뒤에는 ‘-이’를 써요.'],
   ['곰곰히', '곰곰이', ''],
@@ -54,7 +54,7 @@ const WORDS = [
   ['짜집기', '짜깁기', ''],
   ['구렛나루', '구레나룻', ''],
   ['촛점', '초점', ''],
-  ['댓가', '대가', ''],
+  ['댓가(?!지)', '대가', ''],
   ['갯수', '개수', ''],
   ['우뢰', '우레', ''],
   ['웅큼', '움큼', ''],
@@ -72,9 +72,10 @@ const WORDS = [
   ['어의(가 ?|도 ?)없', '어이$1없', '‘어이없다’예요. (‘어의’는 임금의 의사)'],
   ['(?<![가-힣])(내|네|제|니|너)꺼(?=[야예다요지니라]|[^가-힣]|$)', '$1 거', '‘것’을 말하는 ‘거’는 띄어 쓰고 예사소리로 써요.'],
   ['안절부절(?!못)(하|했|한|해)', '안절부절못$1', '‘안절부절못하다’가 맞아요.'],
-  ['([가-힣])지않', '$1지 않', '‘-지 않다’는 띄어 써요.'],
+  ['([가-힣])(?<![머못마])지않', '$1지 않', '‘-지 않다’는 띄어 써요. (‘머지않다’·‘못지않다’·‘마지않다’는 한 낱말)'],
 ];
-const words = WORDS.map(([re, to, why]) => ({ re: new RegExp(re, 'g'), to, why }));
+// bare: 앞뒤 살피기((?=…)·(?!…)·(?<…))를 뺀 꼴. 찾은 글자만 고칠 말로 바꿀 때 쓴다 (앞뒤 글자는 찾은 글자에 없으니)
+const words = WORDS.map(([re, to, why]) => ({ re: new RegExp(re, 'g'), bare: new RegExp(re.replace(/\(\?<?[=!](?:[^()]|\([^()]*\))*\)/g, '')), to, why }));
 
 // 규칙: find(text) → [{i, len, fix: [고칠 말…], why}]
 const each = (text, re, fn) => {
@@ -93,20 +94,22 @@ export const RULES = [
     ...each(t, /뵜/g, () => ({ fix: ['뵀'], why: '' })),
   ] },
   { id: 'words', kind: 'sp', label: '자주 틀리는 낱말', hint: '몇일 → 며칠 · 왠일 → 웬일 · 금새 → 금세 · 설레임 → 설렘 …', find: (t) =>
-    [...words.flatMap((w) => each(t, w.re, (m) => ({ fix: [m[0].replace(new RegExp(w.re.source), w.to)], why: w.why }))),
-      ...each(t, /([가-힣])이였/g, (m) => (jong(m[1]) > 0 ? { fix: [m[1] + '이었'], why: '받침 있는 말 뒤에는 ‘이었다’예요. (받침 없으면 ‘였다’)' } : null))] },
+    [...words.flatMap((w) => each(t, w.re, (m) => ({ fix: [m[0].replace(w.bare, w.to)], why: w.why }))),
+      // 받침 있는 말 + ‘이였다’: ‘고양이였다’처럼 ‘이’로 끝나는 낱말이 많아, 흔한 낱말 뒤에서만 잡는다 (나머지는 AI 검사로)
+      ...each(t, /(?<![가-힣])((?:그|이|저)?것|때문|뿐|처음|사람|마음|생각|사실|순간|시간|학생|선생님|당신|자신|밤|집|꿈|봄|여름|가을|겨울|아침|저녁|오늘|내일|어젯밤|작년|올해|정말|진심|거짓말|농담|실수|운명|사랑|전부|모습|얼굴|목소리|소리|말|일|남자|여자|아들|딸|형|동생|언니|오빠|누나|동생|엄마|아빠|선배|후배|손님|주인|범인|정답|문제|비밀|약속|이름|첫날|마지막)이였/g, (m) => ({ fix: [m[1] + '이었'], why: '받침 있는 말 뒤에는 ‘이었다’예요. (받침 없으면 ‘였다’)' }))] },
   { id: 'anh', kind: 'sp', label: '안/않', hint: '않되 → 안 되 · 않해 → 안 해', find: (t) =>
     each(t, /않(되|돼|하|해|했|할|한)/g, (m) => ({ fix: ['안 ' + m[1]], why: '‘아니’를 줄인 말은 ‘안’이에요. (‘않’은 ‘아니하’)' })) },
   { id: 'lge', kind: 'sp', label: '-ㄹ게 · -ㄹ걸 · -ㄹ 거', hint: '할께 → 할게 · 할껄 → 할걸 · 할꺼야 → 할 거야', find: (t) =>
-    each(t, /([가-힣])(께|껄|꺼)(?=[요야예다니면라고지든]|[^가-힣]|$)/g, (m) => {
-      if (jong(m[1]) !== RIEUL || /[불말]/.test(m[1])) return null;
+    // ‘께’는 말끝(요·문장부호·끝)에서만: ‘선생님께’·‘민철께 드렸다’·‘보름께’ 같은 높임·때 뒤의 ‘께’는 그대로
+    each(t, /([가-힣])(께(?=요|[\s.!?,…~”’"」』)]*$|[.!?,…~”’"」』)])|껄(?=요|[^가-힣]|$)|꺼(?=야|예요|에요|요|다|면|라|든|였|[.!?,…~”’"」』)\s]|$))/g, (m) => {
+      if (jong(m[1]) !== RIEUL || /[불말날달껄낄깔꼴]/.test(m[1])) return null;
       const to = m[2] === '께' ? m[1] + '게' : m[2] === '껄' ? m[1] + '걸' : m[1] + ' 거';
       return { fix: [to], why: m[2] === '꺼' ? '‘것’을 말하는 ‘거’는 띄어 쓰고 예사소리로 써요.' : '소리는 [께]로 나도 ‘-ㄹ게’, ‘-ㄹ걸’로 써요.' };
     }) },
   { id: 'spacing', kind: 'sp', label: '띄어쓰기 (자주 붙여 쓰는 말)', hint: '할수있다 → 할 수 있다 · 갈때 → 갈 때 · 할거야 → 할 거야 · 것같다 → 것 같다', find: (t) => [
     ...each(t, /([가-힣])수 ?(있|없)/g, (m) => (jong(m[1]) !== RIEUL || /[말술실별홀일골철결멸필솔]/.test(m[1]) ? null : { fix: [`${m[1]} 수 ${m[2]}`], why: '‘수’는 띄어 써요.' })),
     ...each(t, /([가-힣])때(?!문|기|리)/g, (m) => (jong(m[1]) !== RIEUL || /[물쓸볼골]/.test(m[1]) ? null : { fix: [`${m[1]} 때`], why: '‘때’는 띄어 써요.' })),
-    ...each(t, /([가-힣])거(?=야|예요|에요|다|면|라|니|지|든|였)/g, (m) => (jong(m[1]) !== RIEUL || /[설멀별얼]/.test(m[1]) ? null : { fix: [`${m[1]} 거`], why: '‘거(것)’는 띄어 써요.' })),
+    ...each(t, /([가-힣])거(?=야|예요|에요|다|면|라|니|든|였)/g, (m) => (jong(m[1]) !== RIEUL || /[설멀별얼알철칠불뻘벌헐즐]/.test(m[1]) ? null : { fix: [`${m[1]} 거`], why: '‘거(것)’는 띄어 써요.' })),
     ...each(t, /것같/g, () => ({ fix: ['것 같'], why: '‘같다’는 띄어 써요.' })),
   ] },
   { id: 'quotePair', kind: 'pn', label: '따옴표 짝', hint: '여는 따옴표만 있거나 닫는 따옴표만 있을 때', find: (t) => {
@@ -132,7 +135,8 @@ export const RULES = [
   { id: 'punctSpace', kind: 'pn', label: '문장부호 앞 빈칸', hint: '가자 . → 가자.', find: (t) =>
     each(t, /(?<=[^\s])[ \u00a0]+(?=[.,!?”’」』)](?!\.))/g, () => ({ fix: [''], why: '문장부호 앞에는 빈칸을 두지 않아요.' })) },
   { id: 'punctAfter', kind: 'pn', label: '문장부호 뒤 빈칸 없음', hint: '왔다.그리고 → 왔다. 그리고', find: (t) =>
-    each(t, /(?<=[가-힣])([.,!?])([가-힣])/g, (m) => ({ fix: [`${m[1]} ${m[2]}`], why: '문장부호 뒤에는 한 칸 띄어요.' })) },
+    each(t, /([가-힣])([.,!?])([가-힣])/g, (m) => (m[2] === '.' && !/[다요까지네죠오라자군나니걸게데어아야해래세고며냐구가]/.test(m[1]) ? null // ‘남.북’ 같은 줄임은 그대로
+      : { i: m.index + 1, len: 2, fix: [`${m[2]} ${m[3]}`], why: '문장부호 뒤에는 한 칸 띄어요.' })) },
   { id: 'quoteInner', kind: 'pn', label: '따옴표 안쪽 빈칸', hint: '“ 가자.” → “가자.”', find: (t) =>
     each(t, /([“‘「『])[ \u00a0]+/g, (m) => ({ fix: [m[1]], why: '여는 따옴표 바로 뒤에는 빈칸을 두지 않아요.' })) },
   { id: 'quoteBefore', kind: 'pn', label: '따옴표 앞 빈칸 없음', hint: '그는“가자 → 그는 “가자', find: (t) =>
@@ -229,7 +233,8 @@ function resolveAi(list, doc) {
 const mergeAi = (rules, ai) => [...rules.filter((x) => !ai.some((y) => x.from < y.to && y.from < x.to)), ...ai].sort((a, b) => a.from - b.from);
 // 장 하나의 걸린 곳: 지금 장은 편집기에서, 다른 장은 저장된 원고에서
 function chapterIssues(id) {
-  if (id === app.cur) return { doc: app.editor.state.doc, list: current() };
+  // 밑줄(교정 모드)을 꺼 두어도 목록은 보인다
+  if (id === app.cur) return { doc: app.editor.state.doc, list: isOn() ? current() : mergeAi(issuesOf(app.editor.state.doc), key.getState(app.editor.state)?.ai || []) };
   const doc = docOf(app.chapters.get(id)?.html);
   return { doc, list: mergeAi(issuesOf(doc), resolveAi(aiByCh.get(id), doc)) };
 }
@@ -526,8 +531,12 @@ ${ch.map((p, i) => `[${i + 1}] ${p.text}`).join('\n')}`;
     for (const e of r.errors || []) {
       const p = ch[(e.p || 0) - 1];
       if (!p || !e.wrong || e.wrong === e.right) continue;
-      const i = p.text.indexOf(e.wrong);
+      // AI가 따옴표·빈칸 모양을 바꿔 옮겨도 찾는다 (글자 수는 그대로인 바꿈만)
+      const norm = (x) => x.replace(/[“”„]/g, '"').replace(/[‘’]/g, "'").replace(/[\u00a0\u3000]/g, ' ');
+      let i = p.text.indexOf(e.wrong);
+      if (i < 0) i = norm(p.text).indexOf(norm(e.wrong));
       if (i < 0) continue;
+      e.wrong = p.text.slice(i, i + e.wrong.length);
       // 앞뒤 같은 글자는 빼고 바뀐 곳만 밑줄
       let a = 0, b = 0;
       const w = e.wrong, t = e.right || '';
@@ -552,7 +561,6 @@ const KINDS = { sp: '맞춤법', space: '띄어쓰기', pn: '문장부호' };
 const kindOf = (x) => (x.ai ? (x.label === '띄어쓰기' ? 'space' : x.kind) : x.rule === 'spacing' ? 'space' : x.kind);
 export async function showProof() {
   closePop();
-  if (!isOn()) setProof(true);
   recheck();
   let busy = null;
   const many = (app.project?.order.length || 0) > 1;
@@ -607,7 +615,7 @@ export async function showProof() {
         const nAi = all.filter((x) => x.ai).length;
         $('#pfSum').innerHTML = all.length
           ? `<b>${scope === 'all' ? '작품 전체' : '이 장'}에서 ${all.length}곳</b>${Object.entries(KINDS).filter(([k]) => cnt[k]).map(([k, l]) => `<span class="pf-chip pp-${k === 'space' ? 'sp' : k}">${l} ${cnt[k]}</span>`).join('')}${nAi ? `<span class="pf-chip pf-chip-ai">AI가 찾은 곳 ${nAi}</span>` : ''}`
-          : `<b>${isOn() ? '걸리는 곳이 없어요.' : '교정이 꺼져 있어요.'}</b>`;
+          : '<b>걸리는 곳이 없어요.</b>';
         let n = 0;
         $('#pfList').innerHTML = all.length ? groups.filter((g) => g.list.length).map((g, gi) => `
           ${ids.length > 1 ? `<div class="pf-ch"><b>${h(g.title || '제목 없는 장')}</b><span>${g.list.length}곳</span>${g.id === app.cur ? '<small>지금 장</small>' : ''}</div>` : ''}
@@ -618,7 +626,7 @@ export async function showProof() {
               <span class="pf-act">${x.fix.map((t, k) => `<button type="button" class="small${k === 0 ? ' primary' : ''}" data-a="fix" data-k="${k}">${x.fix.length > 1 ? h(vis(t)) + '로' : '고치기'}</button>`).join('')}<button type="button" class="small ghost" data-a="ign" title="${x.ai ? '이번만 무시' : '이 작품에서 무시'}">무시</button></span>
               <span class="pf-fix"><del>${h(vis(x.word))}</del> → ${x.fix.length ? x.fix.map((t) => `<ins>${h(vis(t))}</ins>`).join(' 또는 ') : '<i>직접 고쳐 주세요</i>'}${x.why ? ` <small class="pf-why">${h(x.why)}</small>` : ''}</span>
             </div>`).join('')}`).join('')
-          : `<p class="proof-empty">${isOn() ? '걸리는 곳이 없어요. 👍' : '교정이 꺼져 있어요.'}</p>`;
+          : '<p class="proof-empty">걸리는 곳이 없어요. 👍</p>';
         $('#pfIgn').textContent = (app.project.proofIgnore || []).map((x) => x.split(':').slice(1).join(':')).join(', ') || '없음';
         const done = autoFixed().sort((a, b) => a.from - b.from);
         $('#pfDone').innerHTML = done.length ? `<div class="pd-head"><b>이 장에서 자동으로 고친 곳 ${done.length}곳</b><button type="button" class="small" data-p="revertAll">모두 되돌리기</button><button type="button" class="small ghost" data-p="keepAll">모두 확인</button></div>

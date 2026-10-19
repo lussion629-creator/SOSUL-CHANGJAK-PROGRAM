@@ -12,15 +12,18 @@ const len = (t) => (t || '').replace(/\s+/g, ' ').trim().length;
 let q = Promise.resolve();
 const inQ = (fn) => { const p = q.then(fn); q = p.catch(() => {}); return p; };
 
-export function addToStash(text, kind, { pid = app.project?.id, ch = app.cur } = {}) {
+// 문장인지 문단인지: 지울 때 문단을 통째로 지웠으면 'para', 아니면 'sent' (예전 항목은 줄바꿈이 있으면 문단)
+export const unitOf = (x) => x.unit || (x.text.includes('\n') ? 'para' : 'sent');
+export function addToStash(text, kind, { pid = app.project?.id, ch = app.cur, unit } = {}) {
   text = (text || '').replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   if (!pid || len(text) < STASH_MIN) return Promise.resolve(false);
   const title = app.chapters?.get(ch)?.title || '';
   return inQ(async () => {
     const list = await S.stashOf(pid);
     const same = list.find((x) => !x.gone && x.text === text);
-    if (same) { same.t = Date.now(); same.kind = kind; same.ch = ch; same.title = title; }
-    else list.push({ id: S.uid(), t: Date.now(), text, kind, ch, title });
+    unit = unit === 'para' || text.includes('\n') ? 'para' : 'sent';
+    if (same) { same.t = Date.now(); same.kind = kind; same.ch = ch; same.title = title; same.unit = unit; }
+    else list.push({ id: S.uid(), t: Date.now(), text, kind, ch, title, unit });
     await S.putStash(pid, list);
     return true;
   }).then((r) => { if (isTabOpen('stash') && pid === app.project?.id) renderStash(); markTab(); return r; })
@@ -70,6 +73,8 @@ export function initStash() {
   // 보관함 목록 동작
   $('#stashList').addEventListener('click', onListClick);
   $('#stashSearch').addEventListener('input', renderStash);
+  $('#stashFilter').addEventListener('click', (e) => { const b = e.target.closest('[data-u]'); if (b) { unitFilter = b.dataset.u; renderStash(); } });
+  $('#stashCopyAll').addEventListener('click', copyAll);
 }
 
 // 지운 글을 모으는 데 썼으면 true
@@ -79,32 +84,37 @@ function onChange(tr) {
   const ev = tr.getMeta('uiEvent');
   const recent = Date.now() - lastKey.t < 600;
   if (ev !== 'cut' && ev !== 'paste' && ev !== 'drop' && !recent) return; // 사람이 손으로 한 변경만
-  let del = '', ins = '', from = -1, to = -1, steps = 0;
+  let del = '', ins = '', from = -1, to = -1, steps = 0, whole = false;
   tr.steps.forEach((st, i) => {
     if (!st.slice || st.to == null) return;
     const d = tr.docs[i];
     if (st.to > st.from) {
       del += (del ? '\n' : '') + d.textBetween(st.from, st.to, '\n', '');
       if (!steps) { from = st.from; to = st.to; }
+      // 문단 하나 이상을 처음부터 끝까지 지웠는가
+      const a = d.resolve(st.from), b = d.resolve(st.to);
+      if ((a.parentOffset === 0 || !a.parent.isTextblock) && (b.parentOffset === b.parent.content.size || !b.parent.isTextblock)) whole = true;
       steps++;
     }
     if (st.slice.content.size) ins += st.slice.content.textBetween(0, st.slice.content.size, '\n', '');
   });
   if (!del) { flush(); return; } // 새로 쓰기 시작하면 모은 것을 담는다
   if (ev === 'drop' && del.replace(/\s/g, '') === ins.replace(/\s/g, '')) return; // 끌어서 옮기기
-  if (ev === 'cut') { flush(); addToStash(del, 'cut'); return; }
+  const unit = whole ? 'para' : 'sent';
+  if (ev === 'cut') { flush(); addToStash(del, 'cut', { unit }); return; }
   const key = lastKey.key;
   const keyDel = !ev && (key === 'Backspace' || key === 'Delete') && !ins;
   // 한 글자(또는 낱말)씩 지우기는 모아 두었다가 50자가 넘으면 담는다
   if (keyDel && steps === 1 && len(del) < STASH_MIN) { collect(del, from, to, key); return true; }
   if (keyDel && steps === 1 && buf) { collect(del, from, to, key); flush(); return true; }
   flush();
-  addToStash(del, ev === 'paste' || ins ? 'over' : 'del');
+  addToStash(del, ev === 'paste' || ins ? 'over' : 'del', { unit });
 }
 
 // ---------- 보관함 화면 ----------
 const KIND = { cut: '잘라냄', del: '지움', over: '덮어씀' };
 let shown = [];
+let unitFilter = 'all'; // 'all' 전체 · 'sent' 문장만 · 'para' 문단만
 
 function markTab() {
   const b = document.querySelector('.tabs [data-tab="stash"]');
@@ -117,15 +127,23 @@ export async function renderStash() {
   document.querySelector('.tabs [data-tab="stash"]')?.classList.remove('new');
   const qs = ($('#stashSearch').value || '').trim();
   const all = (await S.stashOf(app.project.id)).filter((x) => !x.gone).sort((a, b) => b.t - a.t);
-  shown = qs ? all.filter((x) => x.text.includes(qs) || (x.title || '').includes(qs)) : all;
+  const n = { all: all.length, sent: all.filter((x) => unitOf(x) === 'sent').length, para: all.filter((x) => unitOf(x) === 'para').length };
+  document.querySelectorAll('#stashFilter [data-u]').forEach((b) => {
+    b.classList.toggle('on', b.dataset.u === unitFilter);
+    b.setAttribute('aria-pressed', b.dataset.u === unitFilter);
+    b.querySelector('small').textContent = n[b.dataset.u] || '';
+  });
+  shown = all.filter((x) => (unitFilter === 'all' || unitOf(x) === unitFilter) && (!qs || x.text.includes(qs) || (x.title || '').includes(qs)));
   $('#stashCount').textContent = all.length ? `${all.length}개` : '';
+  $('#stashCopyAll').disabled = !shown.length;
+  $('#stashCopyAll').textContent = shown.length ? `보이는 ${shown.length}개 모두 복사` : '모두 복사';
   if (!shown.length) {
-    el.innerHTML = `<li class="empty">${qs ? '찾는 문장이 없어요.' : `지우거나 잘라 낸 ${STASH_MIN}자 이상의 문장이 여기에 모여요.`}</li>`;
+    el.innerHTML = `<li class="empty">${qs ? '찾는 문장이 없어요.' : unitFilter === 'para' ? '지우거나 잘라 낸 문단이 아직 없어요.' : unitFilter === 'sent' ? '지우거나 잘라 낸 문장이 아직 없어요.' : `지우거나 잘라 낸 ${STASH_MIN}자 이상의 문장이 여기에 모여요.`}</li>`;
     return;
   }
   el.innerHTML = shown.map((x) => `<li data-id="${h(x.id)}">
     <p class="stash-text">${h(x.text).replace(/\n/g, '<br>')}</p>
-    <div class="stash-meta"><span>${h(x.title || '')}${x.title ? ' · ' : ''}${KIND[x.kind] || '지움'} · ${h(fullTime(x.t))} · ${len(x.text)}자</span>
+    <div class="stash-meta"><span>${h(x.title || '')}${x.title ? ' · ' : ''}${unitOf(x) === 'para' ? '문단' : '문장'} ${KIND[x.kind] || '지움'} · ${h(fullTime(x.t))} · ${len(x.text)}자</span>
       <span class="stash-btns"><button class="small" data-do="insert" title="커서 자리에 다시 넣기">넣기</button><button class="small" data-do="copy">복사</button><button class="small" data-do="drop" title="보관함에서 지우기">×</button></span></div>
   </li>`).join('');
 }
@@ -153,6 +171,20 @@ async function onListClick(e) {
       await S.putStash(pid, list);
     });
     renderStash();
+  }
+}
+
+// 보이는 것(고른 종류·검색)을 오래된 것부터 한 번에 복사: 항목 사이는 빈 줄 하나
+async function copyAll() {
+  const text = [...shown].reverse().map((x) => x.text).join('\n\n');
+  try { await navigator.clipboard.writeText(text); toast(`${shown.length}개를 복사했어요.`); }
+  catch {
+    // 클립보드 권한이 없으면 고른 글로 보여 준다
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.append(ta); ta.select();
+    const ok = document.execCommand?.('copy');
+    ta.remove();
+    toast(ok ? `${shown.length}개를 복사했어요.` : '복사하지 못했어요.');
   }
 }
 

@@ -116,6 +116,12 @@ body.sb-hidden .main > .sidebar { visibility: hidden; overflow: hidden; border: 
 .note-list li { padding: 8px 10px; border-radius: 8px; cursor: pointer; }
 .note-list li:hover { background: var(--bg2); }
 .note-list .k { font-size: 11px; color: var(--accent); margin-right: 6px; }
+.stash-tools { display: flex; gap: 6px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 0 10px 6px; }
+.stash-filter { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.stash-filter button { border: 0; background: var(--paper); padding: 4px 10px; font-size: 12px; color: var(--ink2); }
+.stash-filter button + button { border-left: 1px solid var(--line); }
+.stash-filter button.on { background: var(--accent); color: var(--paper); }
+.stash-filter small { opacity: .8; font-size: 11px; }
 .stash-list { list-style: none; margin: 0; padding: 0 6px 12px; overflow-y: auto; flex: 1; }
 .stash-list li { padding: 8px 10px; border-radius: 8px; cursor: pointer; border-bottom: 1px solid var(--line); }
 .stash-list li:hover { background: var(--bg2); }

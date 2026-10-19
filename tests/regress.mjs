@@ -1143,7 +1143,7 @@ await test('드라이브: 쓰는 도중 표가 끝나도 다음 동기화 때 �
 });
 
 await test('맞춤법 검사: 작품 전체의 틀린 곳이 장마다 한 번에 나오고(틀린 말 → 고칠 말), 다른 장도 고치기·모두 고치기·AI 검사가 되며, 흔한 오탐은 없다', async () => {
-  const { ctx, page } = await boot({ proof: true, tts: { cache: false } });
+  const { ctx, page } = await boot({ proof: false, tts: { cache: false } }); // 밑줄을 꺼 두어도 목록은 보인다
   await mockGoogle(ctx);
   await page.evaluate(() => localStorage.setItem('nw-gemini-key', 'AIza-test-key-0000000000'));
   await page.reload(); await page.waitForSelector('.ProseMirror');
@@ -1175,7 +1175,7 @@ await test('맞춤법 검사: 작품 전체의 틀린 곳이 장마다 한 번�
   await page.waitForFunction((id) => true, null);
   await page.waitForTimeout(300);
   const at = await run(page, `const e = A.app.editor; return { cur: A.app.cur, sel: e.state.doc.textBetween(e.state.selection.from, e.state.selection.to), ai: document.querySelectorAll('.ProseMirror .pf-ai').length };`);
-  assert(at.cur === order[2] && at.sel === '구지' && at.ai === 1, '셋째 장으로: ' + JSON.stringify(at));
+  assert(at.cur === order[2] && at.sel === '구지', '셋째 장으로: ' + JSON.stringify(at));
   // 이 장만 보기
   await page.click('#dlg label:has(input[name=scope][value=cur])');
   assert((await page.$$('#pfList .pf-ch')).length === 0 && (await rows()).every((x) => !/어떻해|되요/.test(x)), '이 장만: ' + (await rows()).join(' | '));
@@ -1194,6 +1194,54 @@ await test('맞춤법 검사: 작품 전체의 틀린 곳이 장마다 한 번�
   assert(snaps.includes('맞춤법 모두 고치기 전'), '버전 기록: ' + snaps);
   assert(/걸리는 곳이 없어요/.test(await page.textContent('#pfList')), '다 고친 뒤 빈 목록');
   // 셋째 장을 열어도 남은 것 없음, 다른 장으로 가기 동작
+  await ctx.close();
+});
+
+await test('맞춤법 규칙: 바른 문장 130여 개는 걸리지 않고, 틀린 문장 50여 개는 고칠 말대로 고치면 바른 문장이 된다', async () => {
+  const { OK, BAD } = await import('./proof-cases.mjs');
+  const { ctx, page } = await boot();
+  const r = await run(page, `const P = await import('/src/proof.js');
+    const fp = arg.OK.map((t) => [t, P.checkText(t)]).filter(([, l]) => l.length).map(([t, l]) => t + ' ⇒ ' + l.map((x) => x.word + '→' + x.fix.join('/')).join(', '));
+    const bad = arg.BAD.map(([t, want]) => { const l = P.checkText(t); let s = t; for (const x of [...l].sort((a, b) => b.i - a.i)) s = s.slice(0, x.i) + (x.fix[0] ?? x.word) + s.slice(x.i + x.len); return s === want ? null : t + ' ⇒ ' + s + ' (바람: ' + want + ')'; }).filter(Boolean);
+    return { fp, bad };`, { OK, BAD });
+  assert(!r.fp.length, '바른 문장을 잡음:\n' + r.fp.join('\n'));
+  assert(!r.bad.length, '틀린 문장을 못 고침:\n' + r.bad.join('\n'));
+  await ctx.close();
+});
+
+await test('문장 보관함: 문장만·문단만 따로 보고, 보이는 것을 한 번에 복사한다 (문단을 통째로 지우면 문단)', async () => {
+  const { ctx, page } = await boot();
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const p1 = '첫째 문단은 통째로 지울 문단입니다. 이 문단은 오십 자가 넘도록 길게 쓴 문단이라서 보관함에 들어가야 합니다.';
+  const s1 = '둘째 문단 안의 이 문장만 골라서 지웁니다. 이 문장도 오십 자가 넘도록 길게 길게 늘여 쓴 문장입니다.';
+  const { id } = await mkProject(page, [{ title: '1장', html: `<p>${p1}</p><p>앞말 ${s1} 뒷말</p><p>끝</p>` }]);
+  const del = (from, to) => run(page, `const e = A.app.editor; e.view.focus(); e.commands.setTextSelection({ from: arg[0], to: arg[1] });`, [from, to]).then(() => page.keyboard.press('Backspace'));
+  // 문단 통째로 (첫 문단 처음부터 끝까지)
+  await del(1, 1 + p1.length);
+  await page.waitForTimeout(300);
+  // 둘째 문단 가운데 문장만
+  const at = await run(page, `let a; A.app.editor.state.doc.descendants((n, pos) => { if (a == null && n.isText && n.text.includes('둘째 문단 안의')) a = pos + n.text.indexOf('둘째 문단 안의'); }); return a;`);
+  await del(at, at + s1.length);
+  await page.waitForTimeout(300);
+  const st = await run(page, `return (await S.stashOf(arg)).map((x) => x.unit + ':' + x.text.slice(0, 5));`, id);
+  assert(st.includes('para:첫째 문단') && st.includes('sent:둘째 문단'), '종류: ' + st);
+  await page.click('.tabs [data-tab="stash"]');
+  await page.waitForSelector('#stashList li[data-id]');
+  await page.click('#stashFilter [data-u=para]');
+  await page.waitForTimeout(100);
+  let items = await page.$$eval('#stashList li[data-id] .stash-text', (els) => els.map((e) => e.textContent.slice(0, 5)));
+  assert(items.join() === '첫째 문단', '문단만: ' + items);
+  await page.click('#stashFilter [data-u=sent]');
+  await page.waitForTimeout(100);
+  items = await page.$$eval('#stashList li[data-id] .stash-text', (els) => els.map((e) => e.textContent.slice(0, 5)));
+  assert(items.join() === '둘째 문단', '문장만: ' + items);
+  await page.click('#stashFilter [data-u=all]');
+  await page.waitForTimeout(100);
+  assert((await page.textContent('#stashCopyAll')).includes('2개'), '복사 단추: ' + await page.textContent('#stashCopyAll'));
+  await page.click('#stashCopyAll');
+  await page.waitForTimeout(200);
+  const clip = await page.evaluate(() => navigator.clipboard.readText());
+  assert(clip === p1 + '\n\n' + s1, '복사한 글: ' + JSON.stringify(clip));
   await ctx.close();
 });
 

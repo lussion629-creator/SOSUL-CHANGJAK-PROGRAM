@@ -282,6 +282,10 @@
       <section class="tab" id="tab-stash" hidden>
         <div class="tab-head"><span>문장 보관함 <small id="stashCount"></small></span></div>
         <p class="hint">지우거나 잘라 낸 50자 이상의 문장·문단은 여기에 모두 남아요. 누르면 펼쳐지고, ‘넣기’로 커서 자리에 다시 넣을 수 있어요.</p>
+        <div class="stash-tools">
+          <div id="stashFilter" class="stash-filter" role="group" aria-label="보관함 종류"><button type="button" data-u="all" class="on" aria-pressed="true">전체 <small></small></button><button type="button" data-u="sent" aria-pressed="false">문장 <small></small></button><button type="button" data-u="para" aria-pressed="false">문단 <small></small></button></div>
+          <button type="button" id="stashCopyAll" class="small" title="지금 보이는 것을 오래된 것부터 한 번에 복사">모두 복사</button>
+        </div>
         <input id="stashSearch" class="search" placeholder="보관함 검색">
         <ul id="stashList" class="stash-list"></ul>
       </section>
