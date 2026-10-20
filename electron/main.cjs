@@ -190,7 +190,12 @@ function createWindow() {
   });
   // 숨은 재연결 창이 어떤 까닭으로 남아 있으면 30초 뒤 닫는다
   win.webContents.on('did-create-window', (child, { url }) => {
-    if (/[?&]prompt=none(&|$)/.test(url || '')) setTimeout(() => { if (!child.isDestroyed()) child.close(); }, 30e3);
+    if (!/[?&]prompt=none(&|$)/.test(url || '')) return;
+    setTimeout(() => { if (!child.isDestroyed()) child.close(); }, 30e3);
+    // 숨은 창이 로그인·계정 고르기 화면으로 가면 사람이 할 일이 남은 것: 바로 닫아 앱이 ‘눌러서 다시 연결’을 보이게 한다
+    child.webContents.on('did-navigate', (ev, to) => {
+      if (/\/(signin|ServiceLogin|AccountChooser|accountchooser|v3\/signin|consent)/i.test(to) && !child.isDestroyed()) child.close();
+    });
   });
   win.webContents.on('will-navigate', (e, url) => {
     if (!isApp(url)) { e.preventDefault(); if (/^https?:/.test(url)) shell.openExternal(url); }

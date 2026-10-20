@@ -624,7 +624,9 @@ export const showSync = () => {
   // 드라이브 연결이 끝난 상태에서 ☁ 표시를 누르면 (사용자가 누른 것이므로) 바로 다시 연결해 동기화한다
   const st = G.status();
   if (st.configured && st.hadToken && !st.connected) {
-    return G.connect({ silent: true }).then(() => syncNow(), (e) => toast('다시 연결하지 못했습니다: ' + e.message, 6000));
+    // 눌러서 다시 연결: 창 없는 연결은 이미 실패한 뒤이므로, 계정을 고를 수 있는 구글 창을 바로 연다
+    // (로그인이 살아 있으면 창이 잠깐 떴다 닫히고, 아니면 계정 고르기·로그인 화면이 보인다)
+    return G.connect().then(() => syncNow(), (e) => toast('다시 연결하지 못했어요. ' + e.message, 7000));
   }
   return showDrive();
 };

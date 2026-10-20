@@ -57,11 +57,12 @@ function loadGis() {
 }
 
 // 구글 로그인 창으로 표를 받는다. silent: 이미 허락한 계정이면 창을 띄우지 않고(데스크톱은 숨은 창) 바로 받는다
-let connecting = null;
+let connecting = null, connectingSilent = false;
 export function connect({ silent = false } = {}) {
   if (!clientId) return Promise.reject(new Error('먼저 설정에서 Google OAuth 클라이언트 ID를 넣어 주세요.'));
-  if (connecting) return connecting;
-  connecting = (async () => {
+  // 창 없는 연결이 진행 중이어도, 사람이 누른 연결은 따로 바로 연다 (기다리면 누른 효과가 사라져 창이 막힌다)
+  if (connecting && !(connectingSilent && !silent)) return connecting;
+  const p = (async () => {
     await loadGis();
     return new Promise((resolve, reject) => {
       let done = false;
@@ -73,7 +74,11 @@ export function connect({ silent = false } = {}) {
         scope: SCOPE,
         ...(hint ? { hint } : {}),
         callback: (r) => {
-          if (r.error) { fail(new Error(r.error_description || r.error)); return; }
+          if (r.error) {
+            const msg = /interaction_required|login_required|consent_required|account_selection_required/.test(r.error) ? '구글에 다시 로그인해야 해요. 연결 창에서 계정을 골라 주세요.'
+              : r.error === 'access_denied' ? '드라이브 연결을 허락하지 않았어요.' : r.error_description || r.error;
+            fail(new Error(msg)); return;
+          }
           if (done) return;
           done = true; clearTimeout(t);
           token = { access_token: r.access_token, expires_at: Date.now() + (r.expires_in - 30) * 1000, cid: clientId };
@@ -85,13 +90,15 @@ export function connect({ silent = false } = {}) {
           resolve(token);
           if (!ls.get(HINT_LS)) rememberAccount();
         },
-        error_callback: (e) => fail(new Error(e?.type === 'popup_failed_to_open' ? '구글 연결 창이 막혔어요.' : e?.message || '구글 연결 창이 닫혔습니다.')),
+        error_callback: (e) => fail(new Error(e?.type === 'popup_failed_to_open' ? '구글 연결 창이 막혔어요. 브라우저의 팝업 차단을 풀고 다시 눌러 주세요.'
+          : e?.type === 'popup_closed' ? '구글 연결 창이 닫혔어요. 다시 눌러서 계정을 골라 주세요.' : e?.message || '구글 연결 창이 닫혔어요.')),
       });
       // 처음 연결할 때만 동의 화면을 보이고, 그 뒤로는 묻지 않는다
       tc.requestAccessToken({ prompt: silent ? 'none' : linkedTo() ? '' : 'consent' });
     });
-  })().finally(() => { connecting = null; });
-  return connecting;
+  })().finally(() => { if (connecting === p) { connecting = null; connectingSilent = false; } });
+  connecting = p; connectingSilent = silent;
+  return p;
 }
 
 // 표가 끝나기 전에 새로 받는다.
@@ -111,7 +118,8 @@ function watch() {
   if (watching || !status().linked) return;
   watching = true;
   let lastTry = 0;
-  const renew = () => {
+  const renew = (e) => {
+    if (e?.target?.closest?.('#syncState')) return; // ☁ 표시는 눌렀을 때 스스로 다시 연결한다 (창이 둘 뜨지 않게)
     if (!needsRenew() || connecting || Date.now() - lastTry < 30e3) return; // 막혀도 30초에 한 번만
     lastTry = Date.now();
     connect({ silent: true }).catch(() => { lastFail = Date.now(); emit(); });

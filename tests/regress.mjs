@@ -1245,6 +1245,24 @@ await test('문장 보관함: 문장만·문단만 따로 보고, 보이는 것�
   await ctx.close();
 });
 
+await test('드라이브: 끊긴 뒤 ☁ 표시를 누르면 창 없는 연결을 다시 하지 않고 계정을 고를 수 있는 구글 창을 연다 (Popup window closed 대신)', async () => {
+  const { ctx, page } = await boot({ syncTarget: 'drive', driveClientId: 'x.apps.googleusercontent.com', autoSync: false });
+  await mockDrive(ctx, { failSilent: true });
+  await page.evaluate(() => { localStorage.setItem('gd-linked', 'x.apps.googleusercontent.com'); localStorage.setItem('gd-token', JSON.stringify({ access_token: 'old', expires_at: Date.now() - 1000 })); });
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(500);
+  await page.evaluate(() => { window.__prompts.length = 0; });
+  await page.click('#syncState');
+  await page.waitForFunction(() => window.__prompts.length > 0);
+  await page.waitForTimeout(200);
+  const p = await page.evaluate(() => window.__prompts);
+  assert(p.join('|') === '', '보이는 창 하나만(prompt 없음): ' + JSON.stringify(p));
+  assert((await run(page, `return (await import('/src/gdrive.js')).status().connected;`)) === true, '다시 연결');
+  // 창을 닫으면 알기 쉬운 말로
+  const msg = await run(page, `const G = await import('/src/gdrive.js'); G.disconnect(); G.configure('x.apps.googleusercontent.com'); window.google.accounts.oauth2.initTokenClient = (cfg) => ({ requestAccessToken: () => setTimeout(() => cfg.error_callback({ type: 'popup_closed', message: 'Popup window closed' }), 5) }); try { await G.connect(); } catch (e) { return e.message; }`);
+  assert(/창이 닫혔어요/.test(msg), '안내: ' + msg);
+  await ctx.close();
+});
+
 export { browser, boot, run, mkProject, typeInto, pressDialog, test, assert, results, mockGoogle };
 if (!process.env.NO_CLOSE) {
   await browser.close();
