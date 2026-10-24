@@ -9,7 +9,7 @@ const CSP = [
   "img-src 'self' data: blob: https://*.googleusercontent.com",
   "connect-src 'self' https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://generativelanguage.googleapis.com https://texttospeech.googleapis.com https://api.openai.com https://api.anthropic.com https: http:",
   "media-src 'self' blob: data:",
-  'frame-src https://accounts.google.com',
+  'frame-src https://accounts.google.com https://wordsisters.com', // 유의어 사전(워드시스터즈) 창
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",

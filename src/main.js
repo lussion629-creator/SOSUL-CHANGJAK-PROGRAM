@@ -28,6 +28,7 @@ import { toggleHelp, bindHelp } from './help.js';
 import { showColors, toggleComplement } from './themecolor.js';
 import { bindZoom, zoomStep } from './zoom.js';
 import { bindSynonyms, toggleSynonyms } from './synonym.js';
+import { bindWS, lookupWS } from './wordsisters.js';
 import { initStash, renderStash, openStash } from './stash.js';
 import { bindDevices, showDevices } from './devices.js';
 const ACTIONS = {
@@ -49,7 +50,7 @@ const ACTIONS = {
   bookPlain: () => { closeRevision(); toggleBook(!(isBookOpen() && app.settings.bookNoCh), { noCh: true }); },
   bigger: () => stepSize(0.5), smaller: () => stepSize(-0.5),
   lsWide: () => stepSpacing(1), lsNarrow: () => stepSpacing(-1), lsReset: () => setSpacing(null), speak: () => speak(app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ') || app.editor.state.selection.$from.parent.textContent),
-  drive: F.showDrive, devices: () => showDevices(), driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport, storage: () => F.showStorage(), colors: () => showColors(), complement: () => toggleComplement(), synonyms: () => toggleSynonyms(), zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), zoomReset: () => zoomStep(0), help: () => toggleHelp(),
+  drive: F.showDrive, devices: () => showDevices(), driveImport: F.driveImport, server: F.showServer, sync: F.showSync, syncImport: F.syncImport, storage: () => F.showStorage(), colors: () => showColors(), complement: () => toggleComplement(), synonyms: () => toggleSynonyms(), wordsisters: () => lookupWS(), zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), zoomReset: () => zoomStep(0), help: () => toggleHelp(),
   renameProject: () => { $('#projectTitle').focus(); $('#projectTitle').select(); },
   addChapter: () => addChapter(), addNote: () => F.editNote(null),
 };
@@ -99,6 +100,7 @@ async function boot() {
   bindHelp();
   bindZoom();
   bindSynonyms();
+  bindWS();
   T.bindTidyMarks();
   T.bindChapterGoal();
   A.bindAnnotations({ onNotesChange: () => { if (isTabOpen('notes')) F.renderNotes(); } });
@@ -243,7 +245,7 @@ function bind() {
   $('#findbar').addEventListener('click', (e) => {
     const b = e.target.closest('[data-find]');
     if (!b) return;
-    ({ prev: () => F.runFind(-1), next: () => F.runFind(1), one: F.replaceOne, all: F.replaceAll, close: F.closeFind })[b.dataset.find]();
+    ({ prev: () => F.runFind(-1), next: () => F.runFind(1), one: F.replaceOne, all: F.replaceAll, undo: F.undoReplace, close: F.closeFind })[b.dataset.find]();
   });
 
   // 단축키 (설정에서 바꿀 수 있음: keys.js)
@@ -266,7 +268,7 @@ function bind() {
     speak: () => ACTIONS.speak(), sprint: () => ACTIONS.sprint(), index: () => A.showIndex(), keys: () => showKeys(),
     tidy: () => T.showTidy(), tidyMark: () => T.toggleTidyMark(), appear: () => T.showAppearances(), split: () => T.splitChapterAtCursor(),
     readAloud: () => R.readAloud(), readSentence: () => R.readSentence(), readParagraph: () => R.readParagraph(), readHere: () => R.jumpTo(app.editor.state.selection.from), readNext: () => R.skip(1), readPrev: () => R.skip(-1), readStop: () => R.stop(), readSettings: () => R.showReaderSettings(), readCast: () => R.showCast(),
-    help: () => toggleHelp(), colors: () => showColors(), complement: () => toggleComplement(), synonyms: () => toggleSynonyms(), zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), zoomReset: () => zoomStep(0), storage: () => F.showStorage(), server: () => F.showServer(),
+    help: () => toggleHelp(), colors: () => showColors(), complement: () => toggleComplement(), synonyms: () => toggleSynonyms(), wordsisters: () => lookupWS(), zoomIn: () => zoomStep(1), zoomOut: () => zoomStep(-1), zoomReset: () => zoomStep(0), storage: () => F.showStorage(), server: () => F.showServer(),
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {

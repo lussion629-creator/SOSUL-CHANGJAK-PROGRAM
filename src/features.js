@@ -10,9 +10,9 @@ import { openFile, exportBook, download, withDate, OPEN_ACCEPT } from './io/inde
 import { countHtml, fmt, htmlToText, repeatedWords, habitWords, longSentences, dialogueRatio, sentences } from './stats.js';
 import { setSearch, gotoMatch, findMatches } from './editor.js';
 import { getHTMLFromFragment } from '@tiptap/core';
-import { EditorState } from '@tiptap/pm/state';
+import { EditorState, TextSelection } from '@tiptap/pm/state';
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
-import { $, $$, h, toast, dialog, confirmDlg, promptDlg, ago, fullTime } from './ui.js';
+import { $, $$, h, toast, toastAction, dialog, confirmDlg, promptDlg, ago, fullTime } from './ui.js';
 import { parseHtml, sanitizeHtml } from './sanitize.js';
 import { isAnno, annoListItem, editAnno, annosForExport } from './annotate.js';
 import { layoutOf, fontName, textCss, readHwpxLayout, setProjectLayout } from './layout.js';
@@ -775,6 +775,7 @@ export function openFind() {
   if (sel && sel.length < 60) $('#findInput').value = sel;
   $('#findInput').focus();
   $('#findInput').select();
+  refreshUndoBtn();
   runFind();
 }
 export function closeFind() { $('#findbar').hidden = true; setSearch(app.editor, ''); }
@@ -806,7 +807,8 @@ export async function runFind(move = 0) {
 function showMatch(q, go) {
   fs.matches = setSearch(app.editor, q, { current: fs.i });
   showCount();
-  if (go && fs.matches[fs.i]) gotoMatch(app.editor, fs.matches[fs.i]);
+  // 찾을 말을 치는 동안에는 선택은 그대로 두고 지금 결과가 보이게만 한다 (Enter를 누르면 그다음으로)
+  if (fs.matches[fs.i]) gotoMatch(app.editor, fs.matches[fs.i], { select: go });
 }
 // 표시: 전체 기준 지금/총수 (‘모든 장’이면 장 순서로 센 번호)
 function showCount() {
@@ -815,14 +817,71 @@ function showCount() {
   const before = fs.global.slice(0, fs.global.findIndex((c) => c.id === app.cur)).reduce((a, c) => a + c.n, 0);
   $('#findCount').textContent = fs.i >= 0 && fs.matches.length ? `${before + fs.i + 1}/${total}` : `0 (다른 장 ${total})`;
 }
+
+// ---------- 바꾸기 되돌리기 ----------
+// 바꾸기·모두 바꾸기 한 번마다 바뀐 장의 앞뒤 원고를 기억해 두었다가 ‘되돌리기’로 되돌린다.
+// 그 뒤에 손으로 고친 장은 덮어쓰지 않는다 (고친 글이 사라지지 않게). 되돌린 것도 Ctrl+Z로 다시 살릴 수 있다.
+const undoStack = []; // [{ label, project, items: [{ id, before, after }] }]
+const htmlOf = (doc) => getHTMLFromFragment(doc.content, app.editor.schema);
+function refreshUndoBtn() {
+  const b = $('#findUndo');
+  const u = undoStack.at(-1);
+  b.disabled = !u || u.project !== app.project?.id;
+  b.title = b.disabled ? '되돌릴 바꾸기가 없어요' : `${u.label} 되돌리기`;
+}
+function pushUndo(label, items) {
+  if (!items.length) return;
+  undoStack.push({ label, project: app.project.id, items });
+  if (undoStack.length > 30) undoStack.shift();
+  refreshUndoBtn();
+}
+export async function undoReplace() {
+  const u = undoStack.at(-1);
+  if (!u || u.project !== app.project?.id) { toast('되돌릴 바꾸기가 없어요.'); return; }
+  undoStack.pop();
+  let done = 0;
+  const skipped = [];
+  for (const it of u.items) {
+    const c = app.chapters.get(it.id);
+    if (!c) continue;
+    if (it.id === app.cur) {
+      if (htmlOf(app.editor.state.doc) !== it.after) { skipped.push(c.title); continue; }
+      const doc = docOf(it.before);
+      const { state } = app.editor;
+      const tr = state.tr.replaceWith(0, state.doc.content.size, doc.content);
+      app.editor.view.dispatch(tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(state.selection.from, tr.doc.content.size)))).setMeta('nwJump', true));
+      done++;
+      continue;
+    }
+    const cached = app.states.get(it.id);
+    if ((cached ? htmlOf(cached.doc) : c.html) !== it.after) { skipped.push(c.title); continue; }
+    const prev = c.html;
+    try {
+      c.html = it.before; c._count = null; c._paras = undefined; c.updated = Date.now();
+      await S.putChapter(c);
+      app.states.delete(it.id);
+      done++;
+    } catch (e) { c.html = prev; skipped.push(c.title); console.warn(e); }
+  }
+  if (u.items.length > 1) renderBinder();
+  runFind(0);
+  refreshUndoBtn();
+  toast(skipped.length
+    ? `${done ? `${u.label}을(를) 되돌렸지만 ` : ''}${skipped.join(', ')}은(는) 바꾼 뒤에 고친 곳이 있어 그대로 두었어요. 버전 기록에서 바꾸기 전 원고를 볼 수 있어요.`
+    : `${u.label}을(를) 되돌렸어요.`, 6000);
+}
+
 export async function replaceOne() {
   const m = fs.matches[fs.i];
   if (!m) return runFind(1);
+  const q = $('#findInput').value, rep = $('#replaceInput').value;
+  const before = htmlOf(app.editor.state.doc);
   // 글자 그대로 넣는다 (‘<b>배</b>’도 그 글자대로)
-  app.editor.view.dispatch(putText(app.editor.state.tr, m.from, m.to, $('#replaceInput').value).scrollIntoView());
-  app.editor.commands.focus();
+  app.editor.view.dispatch(putText(app.editor.state.tr, m.from, m.to, rep).setMeta('nwJump', true));
+  pushUndo(`“${q}” → “${rep}” 바꾸기`, [{ id: app.cur, before, after: htmlOf(app.editor.state.doc) }]);
   await runFind(0);
   if (fs.matches.length) gotoMatch(app.editor, fs.matches[Math.min(fs.i, fs.matches.length - 1)]);
+  toastAction(`1곳을 바꿨어요.`, '되돌리기', undoReplace, 6000);
 }
 // 찾은 자리를 글자 그대로 바꾼다. 서식·주석은 찾은 낱말의 첫 글자 것을 따른다
 // (낱말 전체에 단 주석·굵게가 바꾼 뒤에도 남도록: insertText는 경계에서 앞 글자 서식을 따라 주석이 빠진다)
@@ -841,18 +900,27 @@ function replaceInDoc(state, q, rep) {
 export async function replaceAll() {
   const q = $('#findInput').value, rep = $('#replaceInput').value;
   if (!q) return;
+  const all = $('#findAllChapters').checked;
+  // 바꾸기 전에 몇 곳인지 보여 주고 한 번 더 묻는다
+  const counts = all ? globalCounts(q).filter((c) => c.n) : [{ id: app.cur, n: findMatches(app.editor.state.doc, q).length }].filter((c) => c.n);
+  const total = counts.reduce((a, c) => a + c.n, 0);
+  if (!total) { toast(`“${q}”을(를) 찾지 못했어요.`); return; }
+  const where = all && counts.length > 1 ? `${counts.length}개 장에서 ` : '';
+  if (!(await confirmDlg('모두 바꾸기', `${where}“${h(q)}” ${total}곳을 모두 “${h(rep)}”${rep ? '(으)로' : ' 없이(지우기)'} 바꿉니다.<br><b>정말 바꾸시겠습니까?</b><br><small class="hint">바꾼 뒤에도 찾기 창의 ‘되돌리기’로 되돌릴 수 있어요.</small>`, '바꾸기'))) return;
   let n = 0, chs = 0;
-  const failed = [];
+  const failed = [], items = [];
   const { safetyPoint } = await import('./safety.js');
   // 지금 장
   if (findMatches(app.editor.state.doc, q).length) {
     await safetyPoint(`“${q}” 모두 바꾸기 전`);
+    const before = htmlOf(app.editor.state.doc);
     const r = replaceInDoc(app.editor.state, q, rep);
-    app.editor.view.dispatch(r.tr);
+    app.editor.view.dispatch(r.tr.setMeta('nwJump', true));
+    items.push({ id: app.cur, before, after: htmlOf(app.editor.state.doc) });
     n += r.n; chs++;
   }
-  if ($('#findAllChapters').checked) {
-    if (!(await saveNow())) { toast('지금 장을 저장하지 못해 다른 장은 바꾸지 않았어요. 저장 공간을 확인해 주세요.', 6000); runFind(); return; }
+  if (all) {
+    if (!(await saveNow())) { pushUndo(`“${q}” 모두 바꾸기`, items); toast('지금 장을 저장하지 못해 다른 장은 바꾸지 않았어요. 저장 공간을 확인해 주세요.', 6000); runFind(); return; }
     for (const id of app.project.order) {
       if (id === app.cur) continue;
       const c = app.chapters.get(id);
@@ -866,15 +934,18 @@ export async function replaceAll() {
         c._count = null; c._paras = undefined; c.updated = Date.now();
         await S.putChapter(c);
         app.states.delete(id);
+        items.push({ id, before, after: c.html });
         n += r.n; chs++;
       } catch (e) { c.html = before; failed.push(c.title); console.warn(e); }
     }
     renderBinder();
   }
+  pushUndo(`“${q}” 모두 바꾸기`, items);
   runFind();
-  toast(failed.length
+  const msg = failed.length
     ? `${chs}개 장 ${n}곳을 바꿨지만 ${failed.join(', ')}은(는) 저장하지 못해 바꾸지 않았어요.`
-    : `${chs > 1 ? `${chs}개 장 ` : ''}${n}곳을 바꿨어요. 바꾸기 전 원고는 버전 기록에 남겼어요. (Ctrl+Z 또는 도구 → 실수 되돌리기)`, 6000);
+    : `${chs > 1 ? `${chs}개 장 ` : ''}${n}곳을 바꿨어요.`;
+  toastAction(msg, '되돌리기', undoReplace, 9000);
 }
 
 // ---------- 집중 모드 ----------

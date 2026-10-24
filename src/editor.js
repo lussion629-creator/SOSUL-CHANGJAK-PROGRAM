@@ -88,19 +88,26 @@ export function setSearch(editor, query, { cls = 'search-hit', current = -1 } = 
   return searchKey.getState(editor.state).matches || [];
 }
 
-export function gotoMatch(editor, m) {
+export function gotoMatch(editor, m, { select = true } = {}) {
   const { state, view } = editor;
-  view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, m.from, m.to)));
+  // 타자기 스크롤이 같은 선택 변경에 또 움직이지 않도록 표시해 둔다 (두 번 움직여 화면이 출렁였다)
+  if (select) view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, m.from, m.to)).setMeta('nwJump', true));
   scrollToPos(editor, m.from);
 }
 
+// 찾은 곳을 화면에 보여 준다: 이미 화면 안쪽에 보이면 그대로 두고(누를 때마다 화면이 밀리지 않게),
+// 가까우면 부드럽게, 멀면(화면 한 쪽 반 넘게) 바로 옮긴다 (긴 원고를 훑고 지나가며 어지럽지 않게)
 export function scrollToPos(editor, pos) {
   try {
-    const coords = editor.view.coordsAtPos(pos);
     const sc = editor.view.dom.closest('.paper-scroll, .pane-body');
     if (!sc) return;
+    const coords = editor.view.coordsAtPos(pos);
     const r = sc.getBoundingClientRect();
-    sc.scrollTo({ top: sc.scrollTop + coords.top - r.top - r.height / 3, behavior: 'smooth' });
+    const pad = Math.min(120, r.height * 0.15);
+    if (coords.top >= r.top + pad && coords.bottom <= r.bottom - pad) return;
+    const top = Math.max(0, sc.scrollTop + coords.top - r.top - r.height / 3);
+    const far = Math.abs(top - sc.scrollTop) > r.height * 1.5;
+    sc.scrollTo({ top, behavior: far ? 'instant' : 'smooth' });
   } catch { /* 위치 계산 실패는 무시 */ }
 }
 
@@ -319,8 +326,8 @@ const LetterSpacing = Extension.create({
 const Typewriter = Extension.create({
   name: 'typewriter',
   addOptions() { return { enabled: () => false }; },
-  onSelectionUpdate() {
-    if (!this.options.enabled()) return;
+  onSelectionUpdate({ transaction }) {
+    if (!this.options.enabled() || transaction?.getMeta('nwJump')) return;
     const ed = this.editor;
     requestAnimationFrame(() => {
       try {

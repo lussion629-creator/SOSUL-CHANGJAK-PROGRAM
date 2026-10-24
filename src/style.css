@@ -210,6 +210,7 @@ body.focus.dim .ProseMirror > .has-focus { opacity: 1; }
 .findbar { position: fixed; top: 96px; right: 16px; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 8px; box-shadow: var(--shadow); max-width: calc(100vw - 32px); }
 .findbar input:not([type]) { border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 6px 8px; width: 150px; }
 .findbar button { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 5px 8px; }
+.findbar button:disabled { opacity: .45; cursor: default; }
 #findCount { font-size: 12px; color: var(--ink2); min-width: 40px; }
 
 /* 퇴고 모드 */
@@ -999,6 +1000,17 @@ body.rail-sym .paper-scroll { padding-left: 268px; padding-right: 268px; }
 .syn-panel.left { right: auto; left: 0; border-left: 0; border-right: 1px solid var(--line); box-shadow: 4px 0 14px rgba(0,0,0,.06); }
 body.syn-open .paper-scroll { margin-right: 272px; }
 body.syn-open.syn-left .paper-scroll { margin-right: 0; margin-left: 272px; }
+/* 유의어 사전(워드시스터즈): 유의어 창과 반대쪽에 붙는다 */
+.ws-panel { position: absolute; top: 0; bottom: 0; right: 0; width: min(380px, 60vw); z-index: 4; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); box-shadow: -4px 0 14px rgba(0,0,0,.06); }
+.ws-panel.left { right: auto; left: 0; border-left: 0; border-right: 1px solid var(--line); box-shadow: 4px 0 14px rgba(0,0,0,.06); }
+.ws-panel .syn-head b small { font-weight: 400; color: var(--ink2); font-size: 12px; margin-left: 4px; }
+.ws-panel a.icon-btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; }
+.ws-form { display: flex; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.ws-form input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); padding: 4px 8px; }
+.ws-form button { border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+.ws-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+body.ws-open:not(.ws-left) .paper-scroll { margin-right: min(380px, 60vw); }
+body.ws-open.ws-left .paper-scroll { margin-left: min(380px, 60vw); }
 .syn-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .syn-head b { flex: 1; font-size: 14px; }
 .syn-head .icon-btn { width: 28px; height: 28px; font-size: 13px; }

@@ -404,7 +404,7 @@ for (const startAt of ['A', 'B']) {
     if (startAt === 'B') await run(page, 'return A.openChapter(arg);', order[1]);
     await findUI(page, '사과');
     await page.fill('#replaceInput', '배');
-    await page.click('[data-find="all"]'); await page.waitForTimeout(500);
+    await page.click('[data-find="all"]'); await pressDialog(page, 'ok'); await page.waitForTimeout(500);
     await run(page, 'return A.saveNow();');
     const html = await run(page, 'return Promise.all(arg.map(async (id) => (await S.getChapter(id)).html));', order);
     assert(html[0] === '<p>배 원본입니다.</p>', 'A: ' + html[0]);
@@ -418,7 +418,7 @@ await test('F05 주석이 달린 낱말을 바꿔도 주석 표시가 남는다'
   const { ctx, page } = await boot();
   const { order } = await mkProject(page, [{ title: 'A', html: '<p>처음</p>' }, { title: 'B', html: '<p>그는 <span data-anno="n1">사과</span>를 먹었다.</p>' }]);
   await findUI(page, '사과'); await page.fill('#replaceInput', '배');
-  await page.click('[data-find="all"]'); await page.waitForTimeout(500);
+  await page.click('[data-find="all"]'); await pressDialog(page, 'ok'); await page.waitForTimeout(500);
   const h = await run(page, 'return (await S.getChapter(arg)).html;', order[1]);
   assert(h.includes('배') && !h.includes('사과'), 'B 바뀜: ' + h);
   const hasAnno = await run(page, `return !!A.app.editor.schema.marks.anno || !!Object.keys(A.app.editor.schema.marks).find((k) => /anno/i.test(k));`);
@@ -439,13 +439,98 @@ await test('F06 바꿀 말은 HTML로 해석하지 않는다 (한 개·모두·�
     const one = await page.textContent('.ProseMirror');
     assert(one === `사과 ${rep}` || one === `${rep} 사과`, `한 개(${rep}): ${one}`);
     assert(!(await page.$('.ProseMirror strong')), `굵게가 생기면 안 됨(${rep})`);
-    await page.click('[data-find="all"]'); await page.waitForTimeout(400);
+    await page.click('[data-find="all"]'); await pressDialog(page, 'ok'); await page.waitForTimeout(400);
     const allTxt = await page.textContent('.ProseMirror');
     assert(allTxt === `${rep} ${rep}`, `모두(${rep}): ${allTxt}`);
     const b = await run(page, 'const id = A.app.project.order[1]; const d = document.createElement("div"); d.innerHTML = (await S.getChapter(id)).html; return d.textContent;');
     assert(b === rep, `모든 장(${rep}): ${b}`);
   }
   await ctx.close();
+});
+
+await test('바꾸기 되돌리기: 모두 바꾸기는 한 번 더 묻고(취소하면 그대로), 바꾼 뒤 되돌리기로 모든 장이 돌아온다', async () => {
+  const { ctx, page } = await boot();
+  const { order } = await mkProject(page, [{ title: 'A', html: '<p>사과 <strong>사과</strong></p>' }, { title: 'B', html: '<p>사과와 배</p>' }, { title: 'C', html: '<p>없음</p>' }]);
+  await findUI(page, '사과'); await page.fill('#replaceInput', '감');
+  await page.click('[data-find="all"]');
+  await page.waitForSelector('#dlg[open]');
+  const msg = await page.textContent('#dlg');
+  assert(/정말 바꾸시겠습니까/.test(msg) && /2개 장/.test(msg) && /3곳/.test(msg), '확인 문구: ' + msg);
+  await pressDialog(page, 'close'); await page.waitForTimeout(200);
+  assert(await page.textContent('.ProseMirror') === '사과 사과', '취소하면 그대로');
+  assert(await page.isDisabled('#findUndo'), '되돌릴 것 없음');
+  await page.click('[data-find="all"]'); await pressDialog(page, 'ok'); await page.waitForTimeout(500);
+  assert(await page.textContent('.ProseMirror') === '감 감', '바뀜');
+  assert(/되돌리기/.test(await page.textContent('#toast')), '알림에 되돌리기 단추');
+  await page.click('#findUndo'); await page.waitForTimeout(400);
+  assert(await page.textContent('.ProseMirror') === '사과 사과', 'A 되돌림: ' + await page.textContent('.ProseMirror'));
+  assert(await page.$('.ProseMirror strong'), 'A 굵게 유지');
+  const b = await run(page, 'return (await S.getChapter(arg)).html;', order[1]);
+  assert(b === '<p>사과와 배</p>', 'B 되돌림: ' + b);
+  // 한 개 바꾸기 → 되돌리기 (Ctrl+Z로 되돌린 것도 다시 살릴 수 있다)
+  await findUI(page, '사과'); await page.fill('#replaceInput', '감'); await nextBtn(page);
+  await page.click('[data-find="one"]'); await page.waitForTimeout(200);
+  assert(/감/.test(await page.textContent('.ProseMirror')), '한 개 바뀜');
+  await page.click('#findUndo'); await page.waitForTimeout(300);
+  assert(await page.textContent('.ProseMirror') === '사과 사과', '한 개 되돌림: ' + await page.textContent('.ProseMirror'));
+  // 바꾼 뒤 손으로 고친 장은 덮어쓰지 않는다
+  await page.click('[data-find="all"]'); await pressDialog(page, 'ok'); await page.waitForTimeout(500);
+  await run(page, 'const c = A.app.chapters.get(arg); c.html = "<p>감와 배 그리고 새 글</p>"; await S.putChapter(c);', order[1]);
+  await page.click('#findUndo'); await page.waitForTimeout(400);
+  assert(await page.textContent('.ProseMirror') === '사과 사과', 'A는 되돌림');
+  assert((await run(page, 'return (await S.getChapter(arg)).html;', order[1])).includes('새 글'), 'B의 새 글은 남음');
+  assert(/B/.test(await page.textContent('#toast')), '그대로 둔 장 알림: ' + await page.textContent('#toast'));
+  await ctx.close();
+});
+
+await test('찾기 화면: 치는 동안 첫 결과를 보여 주고, Enter는 둘째로, 이미 보이는 결과는 화면을 밀지 않는다', async () => {
+  const { ctx, page } = await boot();
+  const paras = Array.from({ length: 60 }, (_, i) => `<p>${i + 1}번째 문단. ${i === 30 ? '고양이 하나 고양이 둘. ' : ''}${'가나다라마바사 '.repeat(10)}</p>`).join('');
+  await mkProject(page, [{ title: 'A', html: paras }]);
+  const top = () => page.evaluate(() => Math.round(document.querySelector('.paper-scroll').scrollTop));
+  await findUI(page, '고양이'); await page.waitForTimeout(500);
+  const t1 = await top();
+  assert(t1 > 300 && await page.textContent('#findCount') === '1/2', `치면 첫 결과로: ${t1} ${await page.textContent('#findCount')}`);
+  await page.keyboard.press('Enter'); await page.waitForTimeout(500);
+  assert(await page.textContent('#findCount') === '2/2', '둘째: ' + await page.textContent('#findCount'));
+  assert(Math.abs(await top() - t1) < 2, `같은 화면의 결과는 그대로: ${t1} → ${await top()}`);
+  await ctx.close();
+});
+
+await test('유의어 사전(워드시스터즈): 데스크톱은 원고 옆 창에, 웹은 작은 창으로 커서 낱말(조사 뗀 꼴)을 찾는다', async () => {
+  // 웹: 작은 창
+  {
+    const { ctx, page } = await boot();
+    await ctx.route('https://wordsisters.com/**', (r) => r.fulfill({ contentType: 'text/html', body: '<p>사전</p>' }));
+    await mkProject(page, [{ title: 'A', html: '<p>그는 사과를 먹었다.</p>' }]);
+    await run(page, 'A.app.editor.commands.setTextSelection(5);');
+    const pop = page.waitForEvent('popup');
+    await run(page, `(await import('/src/wordsisters.js')).lookupWS();`);
+    const p = await pop;
+    assert(decodeURIComponent(p.url()) === 'https://wordsisters.com/search/사과', '웹 창 주소: ' + decodeURIComponent(p.url()));
+    const L = await run(page, `const m = await import('/src/wordsisters.js'); return ['사과를','고양이','포도','어머니의','공부에서','나는','걸었다','“바다”'].map(m.lemmaOf);`);
+    assert(JSON.stringify(L) === JSON.stringify(['사과', '고양이', '포도', '어머니의', '공부', '나는', '걸었다', '바다']), '조사 떼기: ' + L);
+    await ctx.close();
+  }
+  // 데스크톱: 원고 옆 창 (유의어 창과 반대쪽)
+  {
+    const { ctx, page } = await boot({ synOpen: true, synSide: 'right' });
+    await ctx.addInitScript(() => { window.desktop = { platform: 'win32', version: '0', onOpenFile() {} }; });
+    await ctx.route('https://wordsisters.com/**', (r) => r.fulfill({ contentType: 'text/html', body: '<p>사전</p>' }));
+    await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(400);
+    await mkProject(page, [{ title: 'A', html: '<p>그는 사과를 먹었다.</p>' }]);
+    await run(page, 'A.app.editor.commands.setTextSelection(5);');
+    await page.keyboard.press('Control+Shift+U'); await page.waitForTimeout(500);
+    assert(await page.isVisible('#wsPanel'), '옆 창 열림');
+    const src = await page.getAttribute('#wsPanel iframe', 'src');
+    assert(decodeURIComponent(src) === 'https://wordsisters.com/search/사과', 'iframe 주소: ' + src);
+    assert(await page.evaluate(() => document.querySelector('#wsPanel').classList.contains('left')), '유의어 창(오른쪽)의 반대쪽');
+    await page.fill('#wsPanel .ws-q', '먹다'); await page.press('#wsPanel .ws-q', 'Enter'); await page.waitForTimeout(200);
+    assert(decodeURIComponent(await page.getAttribute('#wsPanel iframe', 'src')).endsWith('/먹다'), '직접 찾기');
+    await page.click('#wsPanel .ws-close'); await page.waitForTimeout(200);
+    assert(!(await page.isVisible('#wsPanel')), '닫힘');
+    await ctx.close();
+  }
 });
 
 // ---------------- F07 겹친 대화상자 ----------------

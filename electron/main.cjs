@@ -255,6 +255,23 @@ if (!app.requestSingleInstanceLock()) {
     const OK = new Set(['clipboard-read', 'clipboard-sanitized-write', 'fullscreen']);
     session.defaultSession.setPermissionRequestHandler((wc, perm, cb, d) => cb(OK.has(perm) && isApp(d?.requestingUrl || wc.getURL())));
     session.defaultSession.setPermissionCheckHandler((wc, perm, origin) => OK.has(perm) && isApp(origin));
+    // 유의어 사전(워드시스터즈)을 원고 옆 창(iframe)에 띄울 수 있게: 그 사이트 화면이 '다른 사이트 안에 넣지 마' 머리말을 보내도
+    // 이 앱 화면 안에서는 띄운다. 그 사이트의 화면(subFrame)에만, 그리고 앱 화면이 부모일 때만 적용한다.
+    session.defaultSession.webRequest.onHeadersReceived({ urls: ['https://wordsisters.com/*', 'https://*.wordsisters.com/*'] }, (d, cb) => {
+      if (d.resourceType !== 'subFrame' || !isApp(d.frame?.parent?.url || d.referrer || '')) return cb({});
+      const headers = {};
+      for (const [k, v] of Object.entries(d.responseHeaders || {})) {
+        const key = k.toLowerCase();
+        if (key === 'x-frame-options') continue;
+        if (key === 'content-security-policy') {
+          const kept = v.map((x) => x.split(';').filter((p) => !/^\s*frame-ancestors\b/i.test(p)).join(';')).filter((x) => x.trim());
+          if (kept.length) headers[k] = kept;
+          continue;
+        }
+        headers[k] = v;
+      }
+      cb({ responseHeaders: headers });
+    });
     // 숨은 기본 메뉴의 단축키(Ctrl+R 새로 고침, Ctrl+0·±확대, Ctrl+W 닫기 등)가 앱의 단축키 설정보다 먼저 먹지 않게 없앤다.
     // 맥은 복사·붙여넣기(⌘C·⌘V)가 '편집' 메뉴에 달려 있어 앱·편집 메뉴만 남긴다.
     if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));

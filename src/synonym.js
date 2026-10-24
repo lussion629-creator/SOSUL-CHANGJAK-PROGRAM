@@ -170,6 +170,7 @@ function layout() {
   paintMode();
   if (on) fillModels();
   if (isPageView()) applyPageView();
+  document.dispatchEvent(new CustomEvent('nw-syn-changed')); // 유의어 사전(워드시스터즈) 창이 반대쪽으로 비키게
 }
 
 // 모델 칸: 지금 모델 + 불러온 목록 + 권장 모델, 맨 끝에 '목록 불러오기'·'AI 설정'
@@ -216,6 +217,7 @@ export function bindSynonyms() {
   app.editor.on('selectionUpdate', () => schedule());
   app.editor.on('update', () => schedule());
   app.hooks.afterOpen.push(() => { layout(); schedule(); });
+  document.addEventListener('nw-syn-layout', () => layout());
   layout();
 }
 
