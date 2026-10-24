@@ -46,7 +46,7 @@ export const COMMANDS = [
   { id: 'theme', label: '다크 모드 전환', key: '', group: '보기' },
   { id: 'colors', label: '화면 색 (라이트·다크·내 색)', key: '', group: '보기' },
   { id: 'synonyms', label: '유의어 창 (GPT·Claude)', key: 'Ctrl+Shift+Y', group: '보기' },
-  { id: 'wordsisters', label: '유의어 사전에서 찾기 (워드시스터즈)', key: 'Ctrl+Shift+U', group: '보기' },
+  { id: 'thesaurus', label: '유의어 사전 (커서 낱말 찾기)', key: 'Ctrl+Shift+U', group: '보기' },
   { id: 'complement', label: '보색 글자·형광펜 켜기/끄기', key: '', group: '보기' },
   { id: 'zoomIn', label: '원고 확대 (Ctrl+휠 위로)', key: 'Ctrl+=', group: '보기' },
   { id: 'zoomOut', label: '원고 축소 (Ctrl+휠 아래로)', key: 'Ctrl+-', group: '보기' },

@@ -1,6 +1,6 @@
 {
   "name": "novel-writer",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "description": "소설가를 위한 워드프로세서",
   "scripts": {
     "dev": "vite",

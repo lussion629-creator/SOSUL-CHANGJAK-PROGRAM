@@ -497,40 +497,64 @@ await test('찾기 화면: 치는 동안 첫 결과를 보여 주고, Enter는 �
   await ctx.close();
 });
 
-await test('유의어 사전(워드시스터즈): 데스크톱은 원고 옆 창에, 웹은 작은 창으로 커서 낱말(조사 뗀 꼴)을 찾는다', async () => {
-  // 웹: 작은 창
-  {
-    const { ctx, page } = await boot();
-    await ctx.route('https://wordsisters.com/**', (r) => r.fulfill({ contentType: 'text/html', body: '<p>사전</p>' }));
-    await mkProject(page, [{ title: 'A', html: '<p>그는 사과를 먹었다.</p>' }]);
-    await run(page, 'A.app.editor.commands.setTextSelection(5);');
-    const pop = page.waitForEvent('popup');
-    await run(page, `(await import('/src/wordsisters.js')).lookupWS();`);
-    const p = await pop;
-    assert(decodeURIComponent(p.url()) === 'https://wordsisters.com/search/사과', '웹 창 주소: ' + decodeURIComponent(p.url()));
-    const L = await run(page, `const m = await import('/src/wordsisters.js'); return ['사과를','고양이','포도','어머니의','공부에서','나는','걸었다','“바다”'].map(m.lemmaOf);`);
-    assert(JSON.stringify(L) === JSON.stringify(['사과', '고양이', '포도', '어머니의', '공부', '나는', '걸었다', '바다']), '조사 떼기: ' + L);
-    await ctx.close();
-  }
-  // 데스크톱: 원고 옆 창 (유의어 창과 반대쪽)
-  {
-    const { ctx, page } = await boot({ synOpen: true, synSide: 'right' });
-    await ctx.addInitScript(() => { window.desktop = { platform: 'win32', version: '0', onOpenFile() {} }; });
-    await ctx.route('https://wordsisters.com/**', (r) => r.fulfill({ contentType: 'text/html', body: '<p>사전</p>' }));
-    await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(400);
-    await mkProject(page, [{ title: 'A', html: '<p>그는 사과를 먹었다.</p>' }]);
-    await run(page, 'A.app.editor.commands.setTextSelection(5);');
-    await page.keyboard.press('Control+Shift+U'); await page.waitForTimeout(500);
-    assert(await page.isVisible('#wsPanel'), '옆 창 열림');
-    const src = await page.getAttribute('#wsPanel iframe', 'src');
-    assert(decodeURIComponent(src) === 'https://wordsisters.com/search/사과', 'iframe 주소: ' + src);
-    assert(await page.evaluate(() => document.querySelector('#wsPanel').classList.contains('left')), '유의어 창(오른쪽)의 반대쪽');
-    await page.fill('#wsPanel .ws-q', '먹다'); await page.press('#wsPanel .ws-q', 'Enter'); await page.waitForTimeout(200);
-    assert(decodeURIComponent(await page.getAttribute('#wsPanel iframe', 'src')).endsWith('/먹다'), '직접 찾기');
-    await page.click('#wsPanel .ws-close'); await page.waitForTimeout(200);
-    assert(!(await page.isVisible('#wsPanel')), '닫힘');
-    await ctx.close();
-  }
+await test('유의어 사전: 커서 낱말의 기본형을 찾아 뜻풀이·유의어·반의어·예문을 보여 주고, 누르면 원고 낱말을 조사까지 맞춰 바꾼다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: 'A', html: '<p>그는 너무 기뻤다. 거짓말을 했다. 마음이 흐뭇한 날.</p>' }]);
+  const body = () => page.textContent('#thPanel .th-body');
+  // 활용형 → 기본형, 반의어·뜻풀이·예문
+  await run(page, 'A.app.editor.commands.setTextSelection(7);');
+  await page.keyboard.press('Control+Shift+U');
+  await page.waitForFunction(() => /기쁘다/.test(document.querySelector('#thPanel .th-body')?.textContent || ''));
+  let t = await body();
+  assert(/‘기뻤다’의 기본형/.test(t) && /반의어\s*슬프다/.test(t) && /흐뭇하다/.test(t) && /뜻풀이/.test(t) && /예문/.test(t), '기쁘다: ' + t.slice(0, 300));
+  // 이름씨+조사: 유의어를 누르면(↵) ‘거짓말을’ → ‘거짓부리를’
+  await run(page, 'A.app.editor.commands.setTextSelection(13);');
+  await page.click('#thPanel .th-cur');
+  await page.waitForFunction(() => /‘거짓말을’의 기본형/.test(document.querySelector('#thPanel .th-body')?.textContent || ''));
+  t = await body();
+  assert(/유의어/.test(t) && /거짓부리/.test(t), '거짓말 유의어: ' + t.slice(0, 300));
+  await page.locator('#thPanel .th-chip:has(button[data-go="거짓부리"]) .th-rep').first().click();
+  await page.waitForTimeout(200);
+  assert(/거짓부리를 했다/.test(await page.textContent('.ProseMirror')), '바꿈: ' + await page.textContent('.ProseMirror'));
+  // ‘…하다’끼리는 활용형도 바꾼다: 흐뭇한 → 흡족한
+  await run(page, 'const d = A.app.editor.state.doc.textContent; A.app.editor.commands.setTextSelection(d.indexOf("흐뭇") + 2);');
+  await page.click('#thPanel .th-cur');
+  await page.waitForFunction(() => /‘흐뭇한’의 기본형/.test(document.querySelector('#thPanel .th-body')?.textContent || ''));
+  await page.locator('#thPanel .th-chip:has(button[data-go="흡족하다"]) .th-rep').first().click();
+  await page.waitForTimeout(200);
+  assert(/흡족한 날/.test(await page.textContent('.ProseMirror')), '하다 활용 바꿈: ' + await page.textContent('.ProseMirror'));
+  // 낱말을 눌러 찾아 들어가기 · 뒤로 · 책갈피 · 최근
+  await page.click('#thPanel button[data-go="흡족하다"]');
+  await page.waitForFunction(() => /^흡족하다/.test(document.querySelector('#thPanel .th-title')?.textContent.trim() || ''));
+  await page.click('#thPanel .th-star');
+  await page.click('#thPanel .th-back');
+  await page.waitForFunction(() => /^흐뭇하다/.test(document.querySelector('#thPanel .th-title')?.textContent.trim() || ''));
+  await page.click('#thPanel [data-tab="marks"]');
+  assert(/흡족하다/.test(await body()), '책갈피');
+  await page.click('#thPanel [data-tab="recent"]');
+  assert(/흐뭇하다/.test(await body()) && /기쁘다/.test(await body()), '최근: ' + await body());
+  // 직접 치기 · 자동 완성 · 없는 말
+  await page.click('#thPanel [data-tab="look"]');
+  await page.fill('#thPanel .th-q', '아름다');
+  await page.waitForSelector('#thPanel .th-sug:not([hidden]) button');
+  assert((await page.textContent('#thPanel .th-sug')).includes('아름답다'), '자동 완성');
+  await page.fill('#thPanel .th-q', '쀍쀍'); await page.press('#thPanel .th-q', 'Enter');
+  await page.waitForFunction(() => /찾지 못했어요/.test(document.querySelector('#thPanel .th-body')?.textContent || ''));
+  // 낱말 맞히기
+  await page.click('#thPanel [data-tab="quiz"]');
+  await page.waitForSelector('#thPanel .th-quiz-q');
+  await page.click('#thPanel [data-quiz="give"]');
+  assert(/정답은/.test(await body()), '정답 보기');
+  await ctx.close();
+});
+
+await test('유의어 사전: 활용형·조사 붙은 말에서 기본형을 찾는다 (애매하면 다른 후보에 든다)', async () => {
+  const { ctx, page } = await boot();
+  const cases = { 기뻤다: '기쁘다', 걸었다: '걷다', 예쁜: '예쁘다', 더워서: '덥다', 불러: '부르다', 들었다: '듣다', 지었다: '짓다', 파란: '파랗다', 갔다: '가다', 했다: '하다', 마셨다: '마시다', 봤다: '보다', 바다를: '바다', 사과를: '사과', 아름다운: '아름답다', 쓸쓸한: '쓸쓸하다', 살았다: '살다', 몰라: '모르다', 흘렀다: '흐르다', 웃으며: '웃다', 하얀: '하얗다', 그랬다: '그렇다', 잡혔다: '잡히다', 서러웠다: '서럽다', 도와: '돕다', 나았다: '낫다', 추웠다: '춥다', 써서: '쓰다', 깨달았다: '깨닫다', 물었다: '묻다', 아팠다: '아프다', 고요했다: '고요하다', 사람들은: '사람', 그녀에게: '그녀', 하늘이었다: '하늘', 기다렸다: '기다리다', 건넸다: '건네다' };
+  const out = await run(page, `const T = await import('/src/thesaurus.js'); const r = {}; for (const f of arg) { const x = await T.find(f); r[f] = x ? [x.key, ...(x.alt || [])] : []; } return r;`, Object.keys(cases));
+  const bad = Object.entries(cases).filter(([f, e]) => !out[f].includes(e)).map(([f, e]) => `${f}→${out[f].join('/')}(기대 ${e})`);
+  assert(!bad.length, bad.join(', '));
+  await ctx.close();
 });
 
 // ---------------- F07 겹친 대화상자 ----------------

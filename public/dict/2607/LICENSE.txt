@@ -1,0 +1,7 @@
+이 폴더의 사전 데이터는 국립국어원 「우리말샘」(2026년 7월 내려받음)과 「한국어기초사전」의 데이터를
+이 앱에 맞게 고쳐 만든 것입니다. (tools/build-dict.py)
+원 저작물: 국립국어원 우리말샘 https://opendict.korean.go.kr / 한국어기초사전 https://krdict.korean.go.kr
+라이선스: 크리에이티브 커먼즈 저작자표시-동일조건변경허락 2.0 대한민국 (CC BY-SA 2.0 KR)
+https://creativecommons.org/licenses/by-sa/2.0/kr/
+이 폴더의 데이터도 같은 라이선스(CC BY-SA 2.0 KR)로 이용할 수 있습니다.
+‘뜻으로 이은 말’은 뜻풀이에 쓰인 낱말을 이어 이 앱이 만든 것이며 국립국어원의 공식 유의어가 아닙니다.
