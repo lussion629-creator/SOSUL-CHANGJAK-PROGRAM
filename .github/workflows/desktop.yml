@@ -20,6 +20,7 @@ concurrency:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
@@ -45,8 +46,10 @@ jobs:
             release/*.dmg
             release/latest*.yml
 
+  # 한쪽(주로 macOS) 빌드 머신을 못 받아도 만들어진 설치 파일은 먼저 올린다 (나머지는 다시 돌리면 덧붙는다)
   release:
     needs: build
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
