@@ -1,7 +1,7 @@
 // 쪽 설정(용지·여백·글자·문단·쪽 번호)과 템플릿
 // 단위: 길이는 mm, 글자 크기는 pt, 자간·줄 간격은 %, 들여쓰기는 글자 수
 import * as S from './store.js';
-import { app, applySettings } from './app.js';
+import { app, applySettings, scheduleSync } from './app.js';
 
 export { FONTS, fontName, cssFont } from './fonts.js';
 import { FONTS, fontName, cssFont } from './fonts.js';
@@ -54,8 +54,11 @@ export function layoutOf(p = app.project) {
 }
 export async function setProjectLayout(values, tpl) {
   app.project.layout = { ...clean(values), templateId: tpl?.id || '', templateName: tpl?.name || '' };
+  // 바꾼 시각을 적고 동기화에 올린다: 전에는 원고를 고칠 때까지 올라가지 않아, 다른 기기에서 받아 오면 옛 쪽 설정으로 되돌아갔다
+  app.project.layoutAt = app.project.updated = Date.now();
   await S.putProject(app.project);
   applySettings(); // 쪽 보기가 아닐 때도 원고 글자가 쪽 설정을 따르게
+  scheduleSync();
 }
 
 // 본문이 들어가는 칸 (mm)

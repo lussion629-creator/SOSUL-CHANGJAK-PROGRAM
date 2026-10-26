@@ -4,7 +4,13 @@ import {
   layoutOf, setProjectLayout, bodyBox, linesPerPage, readHwpxLayout, readDocxLayout,
 } from './layout.js';
 import { applyPageView, isPageView, togglePageView } from './pageview.js';
-import { $, h, toast, dialog } from './ui.js';
+import { $, h, toast, dialog, confirmDlg } from './ui.js';
+import { app, saveNow, renderBinder } from './app.js';
+import * as S from './store.js';
+import { parseHtml } from './sanitize.js';
+import { getHTMLFromFragment } from '@tiptap/core';
+import { EditorState } from '@tiptap/pm/state';
+import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 
 const NUM = [['outside', '바깥쪽 아래 (책처럼)'], ['center', '가운데 아래'], ['right', '오른쪽 아래'], ['left', '왼쪽 아래'], ['none', '쪽 번호 없음']];
 
@@ -145,6 +151,8 @@ export async function showPageSetup() {
           if ((e.target.checked && w < hh) || (!e.target.checked && w > hh)) { f.w.value = hh; f.h.value = w; }
         }
         if (['w', 'h'].includes(e.target.name)) f.paper.value = '';
+        // 템플릿을 고르면 바로 그 설정을 칸에 채운다 (전에는 ‘불러오기’를 눌러야 해서, 고르고 적용하면 아무것도 안 바뀌었다)
+        if (e.target.name === 'tpl') { const t = templateById(e.target.value); if (t) { fill(f, t); tplSel = t; } }
         if (e.target.name !== 'tpl' && e.target.name !== 'tplName' && e.target.name !== 'pv') tplSel = null;
         preview(f);
       });
@@ -201,6 +209,79 @@ export async function showPageSetup() {
   if (f.pv.checked !== isPageView()) togglePageView(f.pv.checked);
   else applyPageView();
   toast('쪽 설정을 바꿨어요.');
+  await offerFit();
+}
+
+// ---------- 원고에 따로 정해 둔 글자·문단 모양 ----------
+// 글꼴·크기·자간(글자 단위)이나 줄 간격·첫 줄 들여쓰기·문단 아래·줄 나눔(문단 단위)을 원고에 직접 정해 두면
+// 그 글자는 쪽 설정을 바꿔도 그대로 보인다. 쪽 설정을 적용할 때 그런 곳이 있으면 쪽 설정대로 맞출지 묻는다.
+// (굵게·기울임·밑줄·색·형광펜·가운데/오른쪽 정렬·문단 위 간격은 건드리지 않는다)
+const MARK_KEYS = ['fontFamily', 'fontSize', 'letterSpacing'];
+const PARA_KEYS = ['line', 'lineType', 'linePt', 'first', 'after', 'brk'];
+function fitTr(state) {
+  const tr = state.tr;
+  let n = 0;
+  state.doc.descendants((node, pos) => {
+    if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+      const a = { ...node.attrs };
+      let ch = false;
+      for (const k of PARA_KEYS) if (k in a && a[k] != null && a[k] !== '') { a[k] = null; ch = true; }
+      if (ch) { tr.setNodeMarkup(pos, null, a); n++; }
+    }
+    if (node.isText) {
+      const m = node.marks.find((x) => x.type.name === 'textStyle');
+      if (m && MARK_KEYS.some((k) => m.attrs[k] != null && m.attrs[k] !== '')) {
+        const attrs = { ...m.attrs };
+        for (const k of MARK_KEYS) if (k in attrs) attrs[k] = null;
+        tr.removeMark(pos, pos + node.nodeSize, m.type);
+        if (Object.values(attrs).some((x) => x != null && x !== '')) tr.addMark(pos, pos + node.nodeSize, m.type.create(attrs));
+        n++;
+      }
+    }
+  });
+  return { tr, n };
+}
+const docOf = (html) => PMDOMParser.fromSchema(app.editor.schema).parse(parseHtml(html || ''));
+export async function offerFit() {
+  if (!app.project || !app.editor) return;
+  const found = [];
+  for (const id of app.project.order) {
+    const st = id === app.cur ? app.editor.state : EditorState.create({ doc: docOf(app.chapters.get(id)?.html), schema: app.editor.schema });
+    const { n } = fitTr(st);
+    if (n) found.push({ id, n });
+  }
+  if (!found.length) return;
+  const total = found.reduce((a, c) => a + c.n, 0);
+  const ok = await confirmDlg('쪽 설정대로 맞출까요?', `원고 ${found.length}개 장 ${total}곳에 글꼴·글자 크기·자간·줄 간격·들여쓰기를 따로 정해 둔 글자가 있어요. 그곳은 쪽 설정을 바꿔도 예전 모양 그대로 보여요.<br><br><b>쪽 설정대로 맞추면</b> 따로 정한 모양을 지우고 모두 쪽 설정을 따라요. 굵게·기울임·색·가운데 정렬은 그대로 두고, 맞추기 전 원고는 버전 기록에 남겨요.`, '쪽 설정대로 맞추기');
+  if (!ok) return;
+  const { safetyPoint } = await import('./safety.js');
+  let done = 0;
+  for (const { id } of found) {
+    if (id === app.cur) {
+      await safetyPoint('쪽 설정대로 맞추기 전');
+      const { tr } = fitTr(app.editor.state);
+      app.editor.view.dispatch(tr);
+      done++;
+      if (!(await saveNow())) { toast('지금 장을 저장하지 못해 다른 장은 맞추지 않았어요. 저장 공간을 확인해 주세요.', 6000); return; }
+      continue;
+    }
+    const c = app.chapters.get(id);
+    const st = EditorState.create({ doc: docOf(c.html), schema: app.editor.schema });
+    const { tr } = fitTr(st);
+    const before = c.html;
+    try {
+      await S.addSnapshot(c, 'safety', '쪽 설정대로 맞추기 전');
+      c.html = getHTMLFromFragment(tr.doc.content, app.editor.schema);
+      c._count = null; c._paras = undefined; c.updated = Date.now();
+      await S.putChapter(c);
+      app.states.delete(id);
+      done++;
+    } catch (e) { c.html = before; console.warn(e); }
+  }
+  await saveNow();
+  renderBinder();
+  applyPageView();
+  toast(`${done}개 장을 쪽 설정대로 맞췄어요. 맞추기 전 원고는 버전 기록에 있어요.`, 5000);
 }
 
 function pick(accept) {

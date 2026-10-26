@@ -398,6 +398,8 @@ export async function importBundle(raw, { keepIds = true, mode = keepIds ? 'merg
         if (since && (n.updated || 0) <= since) await T('notes').delete(n.id);
       }
       if (local.syncLocal) project.syncLocal = local.syncLocal; // 이 기기의 마지막 동기화 시각은 이 기기 것
+      // 쪽 설정은 더 나중에 바꾼 쪽을 남긴다 (이 기기에서 바꾸고 아직 올리기 전에 받아 와도 되돌아가지 않게)
+      if (local.layout && (local.layoutAt || 0) > (project.layoutAt || 0)) { project.layout = local.layout; project.layoutAt = local.layoutAt; }
     }
 
     for (const c of chapters) {

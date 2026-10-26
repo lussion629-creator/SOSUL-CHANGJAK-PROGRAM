@@ -807,8 +807,8 @@ export async function runFind(move = 0) {
 function showMatch(q, go) {
   fs.matches = setSearch(app.editor, q, { current: fs.i });
   showCount();
-  // 찾을 말을 치는 동안에는 선택은 그대로 두고 지금 결과가 보이게만 한다 (Enter를 누르면 그다음으로)
-  if (fs.matches[fs.i]) gotoMatch(app.editor, fs.matches[fs.i], { select: go });
+  // 찾을 말을 치면 바로 그 자리(커서 뒤 첫 결과)로 간다: 표시만 하고 선택을 두면 Enter가 그다음으로 건너뛰어 엉뚱한 곳으로 갔다
+  if (fs.matches[fs.i]) gotoMatch(app.editor, fs.matches[fs.i]);
 }
 // 표시: 전체 기준 지금/총수 (‘모든 장’이면 장 순서로 센 번호)
 function showCount() {

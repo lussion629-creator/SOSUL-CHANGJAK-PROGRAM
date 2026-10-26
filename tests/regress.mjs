@@ -483,7 +483,7 @@ await test('바꾸기 되돌리기: 모두 바꾸기는 한 번 더 묻고(취�
   await ctx.close();
 });
 
-await test('찾기 화면: 치는 동안 첫 결과를 보여 주고, Enter는 둘째로, 이미 보이는 결과는 화면을 밀지 않는다', async () => {
+await test('찾기 화면: 치면 바로 첫 결과로 가서 선택하고, Enter는 둘째로, 이미 보이는 결과는 화면을 밀지 않는다', async () => {
   const { ctx, page } = await boot();
   const paras = Array.from({ length: 60 }, (_, i) => `<p>${i + 1}번째 문단. ${i === 30 ? '고양이 하나 고양이 둘. ' : ''}${'가나다라마바사 '.repeat(10)}</p>`).join('');
   await mkProject(page, [{ title: 'A', html: paras }]);
@@ -491,6 +491,8 @@ await test('찾기 화면: 치는 동안 첫 결과를 보여 주고, Enter는 �
   await findUI(page, '고양이'); await page.waitForTimeout(500);
   const t1 = await top();
   assert(t1 > 300 && await page.textContent('#findCount') === '1/2', `치면 첫 결과로: ${t1} ${await page.textContent('#findCount')}`);
+  const sel = await run(page, 'const { from, to } = A.app.editor.state.selection; return A.app.editor.state.doc.textBetween(from, to);');
+  assert(sel === '고양이', '첫 결과가 선택됨: ' + sel);
   await page.keyboard.press('Enter'); await page.waitForTimeout(500);
   assert(await page.textContent('#findCount') === '2/2', '둘째: ' + await page.textContent('#findCount'));
   assert(Math.abs(await top() - t1) < 2, `같은 화면의 결과는 그대로: ${t1} → ${await top()}`);
@@ -587,6 +589,64 @@ await test('F07 내보내기 → 쪽 설정(취소·Esc·적용·✕) 뒤에도 
   assert(downloads === 1, '내보내기 한 번: ' + downloads);
   assert(!(await page.isVisible('#dlg[open]')), '창이 닫힘');
   assert(await run(page, 'return A.app.settings.author;') === 'QA author', '지은이 저장');
+  await ctx.close();
+});
+
+await test('쪽 설정: 템플릿만 골라도 적용되고, 원고에 따로 정한 글자·문단 모양은 물어본 뒤 쪽 설정대로 맞춘다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [
+    { title: 'A', html: '<p data-line="250" style="line-height:2.5"><span style="font-size: 14pt; letter-spacing: 5%">큰 글자</span> <strong>굵게</strong></p><p style="text-align:center">가운데</p>' },
+    { title: 'B', html: '<p data-first="3" style="text-indent:3em"><span style="font-family: Gulim; font-size: 20pt; color: #ff0000">빨강</span></p>' },
+  ]);
+  const open = () => { run(page, `const P = await import('/src/pagesetup.js'); await P.showPageSetup();`); return page.waitForSelector('#dlg[open] h2:has-text("쪽 설정")'); };
+  // 템플릿을 고르기만 하고 적용 → 그 템플릿의 값이 들어간다
+  await open();
+  const tpls = await page.$$eval('#dlg [name=tpl] option', (o) => o.map((x) => x.value));
+  const cur = await page.inputValue('#dlg [name=tpl]');
+  const other = tpls.find((v) => v !== cur);
+  await page.selectOption('#dlg [name=tpl]', other);
+  await page.waitForTimeout(100);
+  const want = await run(page, `const L = await import('/src/layout.js'); return L.templateById(${JSON.stringify(other)});`);
+  assert(+await page.inputValue('#dlg [name=w]') === want.w && +await page.inputValue('#dlg [name=size]') === want.size, '템플릿 값이 채워짐');
+  await page.fill('#dlg [name=size]', '11');
+  await page.fill('#dlg [name=mt]', '30');
+  await pressDialog(page, 'ok');
+  // 따로 정한 모양이 있으니 묻는다
+  await page.waitForSelector('#dlg[open] h2:has-text("쪽 설정대로 맞출까요")');
+  assert(/2개 장/.test(await page.textContent('#dlg')), '두 장 모두 찾음: ' + await page.textContent('#dlg p'));
+  await pressDialog(page, 'ok');
+  await page.waitForTimeout(400);
+  const r = await run(page, `
+    const L = A.app.project.layout;
+    const b = (await S.chaptersOf(A.app.project.id)).find((c) => c.title === 'B');
+    const p = document.querySelector('.ProseMirror p');
+    return { size: L.size, mt: L.mt, at: A.app.project.layoutAt, a: A.app.editor.getHTML(), b: b.html, fs: getComputedStyle(p).fontSize, span: getComputedStyle(p.querySelector('span') || p).fontSize };
+  `);
+  assert(r.size === 11 && r.mt === 30 && r.at > 0, '쪽 설정 저장: ' + JSON.stringify([r.size, r.mt, r.at]));
+  assert(!/font-size|letter-spacing|line-height|data-line/.test(r.a) && /<strong>굵게<\/strong>/.test(r.a) && /text-align: ?center/.test(r.a), 'A 장 맞춤: ' + r.a);
+  assert(!/font-size|font-family|text-indent|data-first/.test(r.b) && /color/.test(r.b), 'B 장 맞춤(색은 남김): ' + r.b);
+  assert(r.fs === r.span, '글자 크기가 쪽 설정을 따름: ' + r.fs + ' ' + r.span);
+  // 다시 적용해도 더는 묻지 않는다
+  await open(); await pressDialog(page, 'ok'); await page.waitForTimeout(800);
+  assert(!(await page.isVisible('#dlg[open]')), '맞춘 뒤에는 묻지 않음');
+  await ctx.close();
+});
+
+await test('쪽 설정: 다른 기기에서 받은 예전 쪽 설정이 방금 바꾼 쪽 설정을 덮지 않는다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: 'A', html: '<p>본문</p>' }]);
+  const r = await run(page, `
+    const L = await import('/src/layout.js');
+    const old = JSON.parse(JSON.stringify(A.app.project));
+    await L.setProjectLayout({ ...A.app.project.layout, size: 12.5, mt: 33 });
+    const b = await S.exportBundle(A.app.project.id);
+    const p = b.project || b.projects?.[0];
+    p.layout = { ...p.layout, size: 9, mt: 10 }; p.layoutAt = 1; p.updated = Date.now() + 1000;
+    await S.importBundle(b, { mode: 'merge' });
+    const now = await S.getProject(A.app.project.id);
+    return { size: now.layout.size, mt: now.layout.mt };
+  `);
+  assert(r.size === 12.5 && r.mt === 33, '방금 바꾼 쪽 설정 유지: ' + JSON.stringify(r));
   await ctx.close();
 });
 
@@ -1298,7 +1358,7 @@ await test('맞춤법 검사: 작품 전체의 틀린 곳이 장마다 한 번�
   const cur = (await run(page, `return (await S.chaptersOf(arg)).find((c) => c.title === '첫 장').html;`, pid));
   assert(cur.includes('왔다. 그는') && cur.includes('어떡해') && cur.includes('할게') && cur.includes('실수 없이'), '첫 장: ' + cur);
   assert(chs.some((c) => c.startsWith('둘째 장') && c.includes('돼요')), '둘째 장: ' + chs);
-  assert(chs.some((c) => c.startsWith('셋째 장') && c.includes('바람이었다') && c.includes('굳이 그럴')), '셋째 장(AI 포함): ' + chs);
+  assert(chs.some((c) => c.startsWith('셋째 장') && c.includes('바람이었다') && c.includes('굳이 그럴')), '셋째 장(AI 포함): ' + chs + ' / ' + await page.textContent('#pfMsg') + ' / ' + (await rows()).join(' | '));
   const snaps = await run(page, `return (await S.snapshotsOf(arg)).map((s) => s.label);`, order[2]);
   assert(snaps.includes('맞춤법 모두 고치기 전'), '버전 기록: ' + snaps);
   assert(/걸리는 곳이 없어요/.test(await page.textContent('#pfList')), '다 고친 뒤 빈 목록');
