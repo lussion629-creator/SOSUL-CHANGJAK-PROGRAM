@@ -186,7 +186,7 @@ export async function showExport() {
         <option value="docx">Word 문서 (.docx)</option>
         <option value="doc">Word 97-2003 문서 (.doc)</option>
         <option value="hwpx">한글 문서 (.hwpx) — 한글 2014 이상에서 열림</option>
-        <option value="pdf">PDF (인쇄 창에서 ‘PDF로 저장’)</option>
+        <option value="pdf">${canPdfFile() ? 'PDF (.pdf)' : 'PDF (인쇄 창에서 ‘PDF로 저장’)'}</option>
         <option value="rtf">서식 있는 텍스트 (.rtf)</option>
         <option value="txt">텍스트 (.txt)</option>
         <option value="md">마크다운 (.md)</option>
@@ -220,9 +220,13 @@ export async function showExport() {
   if (f.annos.checked && f.fmt.value === 'docx') book.annos = await annosForExport();
   const L = layoutOf();
   const opt = { layout: { ...L, fontName: fontName(L.font) }, size: L.size, lineHeight: L.line / 100, titlePage: f.titlePage.checked, chapterTitles: f.chapterTitles.checked, chapterBreak: f.chapterBreak.checked, indent: L.indent > 0 };
-  if (f.fmt.value === 'pdf') return printBook(book, opt);
+  if (f.fmt.value === 'pdf' && !canPdfFile()) return printBook(book, opt);
   try {
-    const out = await exportBook(f.fmt.value, book, opt);
+    let out;
+    if (f.fmt.value === 'pdf') {
+      toast('PDF 파일을 만드는 중…', 60000);
+      out = { blob: await pdfBook(book, opt), name: `${(book.title || '원고').replace(/[\\/:*?"<>|]/g, '_')}.pdf` };
+    } else out = await exportBook(f.fmt.value, book, opt);
     out.name = withDate(out.name, app.settings.nameDate);
     download(out.blob, out.name);
     if (f.toDrive?.checked) {
@@ -233,30 +237,73 @@ export async function showExport() {
   } catch (e) { console.error(e); toast('내보내지 못했습니다: ' + e.message, 6000); }
 }
 
-export function printBook(book = bookOf('all'), opt = { titlePage: false, chapterTitles: false, chapterBreak: true, ...(app.settings.exportOpts || {}) }) {
+// 데스크톱 앱은 PDF 파일을 바로 만든다 (웹에서는 브라우저 인쇄 창의 ‘PDF로 저장’)
+export const canPdfFile = () => typeof window.desktop?.printPdf === 'function';
+
+// 인쇄·PDF용 원고: 쪽 보기와 같은 쪽 나눔이 되게 쪽 설정을 그대로 옮긴다
+function buildPrintArea(book, opt) {
   const L = layoutOf();
   const t = textCss(L);
   let area = $('#printArea');
   if (!area) { area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
-  // 쪽 설정대로: 용지·여백·쪽 번호(@page), 글자·문단
-  const num = { outside: null, center: 'bottom-center', right: 'bottom-right', left: 'bottom-left' }[L.num];
-  const numRule = (box) => `@${box} { content: counter(page); font: ${L.size}pt ${t.fontFamily}; color: #444; vertical-align: top; }`;
+  const mm = (pt) => pt * 25.4 / 72;
+  // 쪽 보기는 마지막 줄의 글자가 본문 칸 안에만 들면 그 쪽에 둔다(한글과 같은 방식): 줄 위아래 반쪽 여백만큼 칸을 넓혀야 쪽마다 같은 줄 수가 들어간다
+  const half = mm(L.size * Math.max(0, L.line / 100 - 1) / 2);
+  const top = Math.max(0, L.mt + L.mh - half), bottom = Math.max(0, L.mb + L.mf - half);
+  // 시작 번호: 크롬은 쪽 번호 counter-reset을 받지 않으므로 첫 쪽에서 한꺼번에 올린다
+  // 브라우저는 첫 쪽을 오른쪽 쪽(:right)으로 친다. 시작 번호가 짝수면 첫 쪽이 왼쪽 쪽이므로 맞바꾼다
+  const first = Math.max(1, Math.round(+L.numStart || 1));
+  const [odd, even] = first % 2 ? [':right', ':left'] : [':left', ':right'];
+  // 쪽 번호: 쪽 보기처럼 종이 아래에서 아래쪽 여백(mb)만큼 올라온 자리
+  const pb = Math.max(0, Math.min(L.mb, bottom - mm(L.size)));
+  const numRule = (box, align) => `@${box} { content: counter(page); font-family: ${t.fontFamily}; font-size: ${L.size}pt; line-height: 1; color: #444; vertical-align: bottom; text-align: ${align}; padding-bottom: ${pb}mm; }`;
+  const side = { center: ['bottom-center', 'center'], right: ['bottom-right', 'right'], left: ['bottom-left', 'left'] }[L.num];
   const pageNum = L.num === 'none' ? '' : L.num === 'outside'
-    ? `@page :right { ${numRule('bottom-right')} } @page :left { ${numRule('bottom-left')} }`
-    : `@page { ${numRule(num)} }`;
-  const lr = L.mirror ? `@page :left { margin-left: ${L.mr}mm; margin-right: ${L.ml}mm; }` : '';
+    ? `@page ${odd} { ${numRule('bottom-right', 'right')} } @page ${even} { ${numRule('bottom-left', 'left')} }`
+    : side ? `@page { ${numRule(...side)} }` : '';
+  const lr = L.mirror ? `@page ${even} { margin-left: ${L.mr}mm; margin-right: ${L.ml}mm; }` : '';
+  const f = (x) => Math.round(x * 100) / 100;
   area.innerHTML = `<style>
     @media print {
-      @page { size: ${L.w}mm ${L.h}mm; margin: ${L.mt + L.mh}mm ${L.mr}mm ${L.mb + L.mf}mm ${L.ml}mm; }
+      html, body { background: #fff !important; height: auto !important; min-height: 0 !important; overflow: visible !important; }
+      @page { size: ${L.w}mm ${L.h}mm; margin: ${f(top)}mm ${L.mr}mm ${f(bottom)}mm ${L.ml}mm; }
       ${lr} ${pageNum}
-      ${L.numStart > 1 ? `#printArea { counter-reset: page ${L.numStart - 1}; }` : ''}
-      #printArea .prose { font-family: ${t.fontFamily}; font-size: ${L.size}pt; line-height: ${t.lineHeight}; letter-spacing: ${t.letterSpacing}; text-align: ${t.textAlign}; word-break: ${t.wordBreak}; }
-      #printArea .prose p { text-indent: ${L.indent}em; margin: 0 0 ${L.paraAfter}pt; }
+      ${first > 1 ? `@page :first { counter-increment: page ${first}; }` : ''}
+      #printArea { color: #000; }
+      #printArea .prose { color: #000; font-family: ${t.fontFamily}; font-size: ${L.size}pt; line-height: ${t.lineHeight}; letter-spacing: ${t.letterSpacing}; text-align: ${t.textAlign}; word-break: ${t.wordBreak};
+        white-space: pre-wrap; overflow-wrap: break-word; font-variant-ligatures: none; font-feature-settings: "liga" 0; orphans: 1; widows: 1; }
+      #printArea .prose p { text-indent: ${L.indent}em; margin: 0 0 ${L.paraAfter}pt; orphans: 1; widows: 1; }
+      #printArea .prose p.cont { text-indent: 0; }
+      #printArea .prose [style*="text-align: center"], #printArea .prose [style*="text-align: right"] { text-indent: 0; }
+      #printArea .prose h1, #printArea .prose h2, #printArea .prose h3 { line-height: ${t.lineHeight}; }
       #printArea h1.ch { font-family: ${t.fontFamily}; }
     }</style>` +
     (opt.titlePage ? `<section class="title-page"><h1 style="font-size:26pt">${h(book.title)}</h1><p style="font-size:13pt">${h(book.author || '')}</p></section>` : '') +
     book.chapters.map((c) => `<section${opt.chapterBreak === false ? ' class="cont"' : ''}>${opt.chapterTitles ? `<h1 class="ch">${h(c.title)}</h1>` : ''}<div class="prose">${sanitizeHtml(c.html)}</div></section>`).join('');
+  return L;
+}
+// 쪽 설정 글꼴을 다 받은 뒤에 인쇄한다 (받기 전에 찍으면 다른 글꼴로 나와 줄·쪽이 쪽 보기와 달라진다)
+async function fontsReady(L) {
+  try {
+    const fam = textCss(L).fontFamily;
+    await Promise.race([Promise.all([document.fonts.load(`${L.size}pt ${fam}`, '가나다'), document.fonts.load(`bold ${L.size}pt ${fam}`, '가')]).then(() => document.fonts.ready), new Promise((r) => setTimeout(r, 4000))]);
+  } catch { /* 글꼴을 못 받아도 인쇄는 한다 */ }
+}
+
+export async function printBook(book = bookOf('all'), opt = { titlePage: false, chapterTitles: false, chapterBreak: true, ...(app.settings.exportOpts || {}) }) {
+  const L = buildPrintArea(book, opt);
+  await fontsReady(L);
   setTimeout(() => window.print(), 50);
+}
+
+// PDF 파일 (데스크톱 앱): 인쇄 창 없이 쪽 설정 그대로 파일로 만든다
+export async function pdfBook(book, opt) {
+  const L = buildPrintArea(book, opt);
+  await fontsReady(L);
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
+  const bytes = await window.desktop.printPdf();
+  if (!bytes || !bytes.byteLength) throw new Error('PDF를 만들지 못했습니다.');
+  return new Blob([bytes], { type: 'application/pdf' });
 }
 
 export async function downloadBackup() {
@@ -762,32 +809,65 @@ export async function serverImport() {
 // ---------- 찾기 / 바꾸기 ----------
 // 찾기·바꾸기는 모든 장에서 같은 방식(문서 모델)으로 한다: 굵게·색 등 서식 경계를 넘는 낱말도 찾고,
 // 바꿀 말은 늘 글자 그대로 넣는다(HTML로 해석하지 않는다). 바꾼 글자는 앞 글자의 서식을 따른다.
-const fs = { matches: [], i: -1, global: null };
+// q: 지금 찾는 말, origin: 찾기를 시작한 자리(찾을 말을 고치면 여기서부터 다시 찾는다), at: 마지막으로 보여 준 결과
+const fs = { matches: [], i: -1, global: null, q: null, origin: 0, at: null };
+const docCache = new Map(); // 장 id → { html, doc }: 찾을 말을 칠 때마다 모든 장을 다시 읽지 않게
 const docOf = (html) => PMDOMParser.fromSchema(app.editor.schema).parse(parseHtml(html || ''));
+function chapterDoc(id) {
+  const html = app.chapters.get(id)?.html || '';
+  const c = docCache.get(id);
+  if (c && c.html === html) return c.doc;
+  const doc = docOf(html);
+  docCache.set(id, { html, doc });
+  return doc;
+}
 // 장마다 찾은 개수 (‘모든 장’): 작품 장 순서대로 [{id, n}]
 function globalCounts(q) {
-  return app.project.order.map((id) => ({ id, n: id === app.cur ? findMatches(app.editor.state.doc, q).length : findMatches(docOf(app.chapters.get(id).html), q).length }));
+  return app.project.order.map((id) => ({ id, n: id === app.cur ? findMatches(app.editor.state.doc, q).length : findMatches(chapterDoc(id), q).length }));
 }
 export function openFind() {
   const bar = $('#findbar');
   bar.hidden = false;
-  const sel = app.editor.state.doc.textBetween(app.editor.state.selection.from, app.editor.state.selection.to, ' ');
+  const { from, to } = app.editor.state.selection;
+  const sel = app.editor.state.doc.textBetween(from, to, ' ');
   if (sel && sel.length < 60) $('#findInput').value = sel;
+  fs.q = null; fs.origin = from; fs.at = null;
   $('#findInput').focus();
   $('#findInput').select();
   refreshUndoBtn();
   runFind();
 }
-export function closeFind() { $('#findbar').hidden = true; setSearch(app.editor, ''); }
+export function closeFind() { $('#findbar').hidden = true; setSearch(app.editor, ''); fs.q = null; fs.at = null; }
+// 지금 선택이 마지막으로 보여 준 결과 그대로인가 (아니면 그사이 글을 누르거나 고쳐 커서가 옮겨 간 것)
+const onMatch = () => { const { from, to } = app.editor.state.selection; return !!fs.at && fs.at.cur === app.cur && fs.at.from === from && fs.at.to === to; };
 export async function runFind(move = 0) {
   const q = $('#findInput').value;
   const all = q && $('#findAllChapters').checked;
+  // 찾을 말이 바뀌면 지난 말의 몇째 결과였는지는 버리고, 찾기를 시작한 자리에서 다시 찾는다
+  // (전에는 번호를 그대로 써서 ‘가’의 57째에서 ‘가시’를 치면 ‘가시’의 57째, 엉뚱한 곳으로 갔다)
+  if (q !== fs.q) { fs.q = q; fs.i = -1; }
+  else if (!onMatch()) {
+    // 그사이 원고를 눌러 커서를 옮겼으면 그 자리부터
+    fs.i = -1;
+    fs.origin = app.editor.state.selection.from;
+  }
   fs.matches = setSearch(app.editor, q, { current: -1 });
   fs.global = all ? globalCounts(q) : null;
   const total = fs.global ? fs.global.reduce((a, c) => a + c.n, 0) : fs.matches.length;
-  if (!total) { fs.i = -1; $('#findCount').textContent = q ? '0' : ''; return; }
-  // 지금 장에 없거나 끝을 넘으면 장 순서를 따라 다음(이전) 장으로 (끝에서는 처음으로 돈다)
-  if (all && move && (!fs.matches.length || (move > 0 && fs.i >= fs.matches.length - 1) || (move < 0 && fs.i <= 0))) {
+  if (!total) { fs.i = -1; fs.at = null; $('#findCount').textContent = q ? '0' : ''; return; }
+  // 이 장에서 갈 결과: 처음이면 시작 자리에서 가장 가까운 것(앞으로는 그 자리 뒤 첫 결과, 뒤로는 그 자리 앞 마지막 결과), 아니면 하나 앞·뒤
+  const len = fs.matches.length;
+  let next;
+  if (fs.i < 0 || fs.i >= len) {
+    const o = fs.origin;
+    next = move < 0 ? fs.matches.findLastIndex((m) => m.from < o) : fs.matches.findIndex((m) => m.from >= o);
+    if (next < 0 && !(all && move)) next = move < 0 ? len - 1 : 0;
+  } else {
+    next = fs.i + move;
+    if (next < 0 || next >= len) next = all && move ? -1 : (next + len) % len;
+  }
+  // ‘모든 장’: 이 장에서 더 갈 데가 없으면 장 순서를 따라 다음(이전) 장으로 (끝에서는 처음으로 돈다)
+  if (next < 0 && all && move) {
     const order = fs.global, k = order.findIndex((c) => c.id === app.cur);
     for (let step = 1; step <= order.length; step++) {
       const c = order[(k + move * step + order.length * 2) % order.length];
@@ -795,20 +875,23 @@ export async function runFind(move = 0) {
       if (c.id !== app.cur && !(await openChapter(c.id))) return; // 저장 실패로 머무름
       fs.matches = setSearch(app.editor, q, { current: -1 });
       fs.i = move > 0 ? 0 : fs.matches.length - 1;
-      return showMatch(q, true);
+      if (fs.matches[fs.i]) fs.origin = fs.matches[fs.i].from;
+      return showMatch();
     }
   }
-  if (!fs.matches.length) { fs.i = -1; showCount(); return; }
-  const head = app.editor.state.selection.from;
-  if (fs.i < 0 || fs.i >= fs.matches.length) fs.i = Math.max(0, fs.matches.findIndex((m) => m.from >= head));
-  fs.i = (fs.i + move + fs.matches.length) % fs.matches.length;
-  showMatch(q, !!move);
+  if (!len || next < 0) { fs.i = -1; fs.at = null; showCount(); return; }
+  fs.i = next;
+  if (move) fs.origin = fs.matches[next].from; // 옮긴 뒤 찾을 말을 고치면 여기서부터
+  showMatch();
 }
-function showMatch(q, go) {
-  fs.matches = setSearch(app.editor, q, { current: fs.i });
+function showMatch() {
+  fs.matches = setSearch(app.editor, fs.q, { current: fs.i });
   showCount();
-  // 찾을 말을 치면 바로 그 자리(커서 뒤 첫 결과)로 간다: 표시만 하고 선택을 두면 Enter가 그다음으로 건너뛰어 엉뚱한 곳으로 갔다
-  if (fs.matches[fs.i]) gotoMatch(app.editor, fs.matches[fs.i]);
+  const m = fs.matches[fs.i];
+  if (!m) { fs.at = null; return; }
+  // 찾을 말을 치면 바로 그 자리로 간다(선택). Enter·↓는 그다음 결과로
+  gotoMatch(app.editor, m);
+  fs.at = { cur: app.cur, from: m.from, to: m.to };
 }
 // 표시: 전체 기준 지금/총수 (‘모든 장’이면 장 순서로 센 번호)
 function showCount() {

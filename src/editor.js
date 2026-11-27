@@ -95,20 +95,28 @@ export function gotoMatch(editor, m, { select = true } = {}) {
   scrollToPos(editor, m.from);
 }
 
-// 찾은 곳을 화면에 보여 준다: 이미 화면 안쪽에 보이면 그대로 두고(누를 때마다 화면이 밀리지 않게),
-// 가까우면 부드럽게, 멀면(화면 한 쪽 반 넘게) 바로 옮긴다 (긴 원고를 훑고 지나가며 어지럽지 않게)
+// 찾은 곳을 화면에 보여 준다: 이미 화면 안쪽에 보이면 그대로 두고(누를 때마다 화면이 밀리지 않게), 아니면 한 번에 옮긴다.
+// (전에는 가까우면 부드럽게 미끄러지며 옮겼는데, 긴 원고·쪽 보기에서 미끄러지는 사이 쪽 나눔이 다시 잡히면 엉뚱한 데서 멈췄다)
+// 쪽 보기는 장을 연 뒤나 글자가 바뀐 뒤 잠깐 있다가 쪽을 다시 나누므로, 그 뒤에 한 번 더 확인해 화면 밖이면 다시 맞춘다.
+let recheck = 0;
 export function scrollToPos(editor, pos) {
-  try {
-    const sc = editor.view.dom.closest('.paper-scroll, .pane-body');
-    if (!sc) return;
-    const coords = editor.view.coordsAtPos(pos);
-    const r = sc.getBoundingClientRect();
-    const pad = Math.min(120, r.height * 0.15);
-    if (coords.top >= r.top + pad && coords.bottom <= r.bottom - pad) return;
-    const top = Math.max(0, sc.scrollTop + coords.top - r.top - r.height / 3);
-    const far = Math.abs(top - sc.scrollTop) > r.height * 1.5;
-    sc.scrollTo({ top, behavior: far ? 'instant' : 'smooth' });
-  } catch { /* 위치 계산 실패는 무시 */ }
+  let placed = null; // 맞춘 뒤 화면 안 높이: 쪽을 다시 나눠 그 자리가 밀려나면 다시 맞춘다
+  const place = (again) => {
+    try {
+      const sc = editor.view.dom.closest('.paper-scroll, .pane-body');
+      if (!sc || pos > editor.state.doc.content.size) return;
+      const coords = editor.view.coordsAtPos(pos);
+      const r = sc.getBoundingClientRect();
+      const pad = Math.min(120, r.height * 0.15);
+      const inView = coords.top >= r.top + pad && coords.bottom <= r.bottom - pad;
+      if (inView && !(again && placed != null && Math.abs(coords.top - r.top - placed) > 40)) { if (!again) placed = coords.top - r.top; return; }
+      sc.scrollTo({ top: Math.max(0, sc.scrollTop + coords.top - r.top - r.height / 3), behavior: 'instant' });
+      placed = editor.view.coordsAtPos(pos).top - sc.getBoundingClientRect().top;
+    } catch { /* 위치 계산 실패는 무시 */ }
+  };
+  place(false);
+  const my = ++recheck;
+  setTimeout(() => { if (my === recheck && editor.view.dom.isConnected) place(true); }, 400);
 }
 
 // ---------- 퇴고 표시: 편집 중에도 더해진 곳(초록)·빠진 곳(빨강)을 보여 준다 ----------

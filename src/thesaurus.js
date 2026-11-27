@@ -1,13 +1,14 @@
 // 유의어 사전: 인터넷·AI 없이 앱 안에서 찾는 국어사전 겸 유의어 사전.
-// 데이터: 국립국어원 우리말샘·한국어기초사전(CC BY-SA 2.0 KR)을 tools/build-dict.py로 고쳐 만든 public/dict/2607/
+// 데이터: 국립국어원 우리말샘·한국어기초사전(CC BY-SA 2.0 KR)을 tools/build-dict.py로 고쳐 만든 public/dict/2611/
 //  - s/000~511.json: { w: {낱말: {e: [표제어…], x: {낱말 단위 모음}}}, c: {활용형: 기본형} } (낱말을 crc32로 나눈 조각)
 //  - words.txt: 표제어 목록(자동 완성·기본형 찾기), cats.json: 기초사전 의미 갈래 → 낱말
 // 뜻풀이·예문·유의어(사전에 오른 비슷한말 + 뜻풀이로 이은 말)·반의어·상위어·하위어·같은 갈래 말, 책갈피·최근 찾은 말, 낱말 맞히기.
 import { app, saveSettings } from './app.js';
 import { applyPageView, isPageView } from './pageview.js';
 import { $, h, toast } from './ui.js';
+import { examplesOf, findInWork, jumpTo, renderDictExamples, renderWorkExamples, moreLinks } from './usage.js';
 
-const BASE = './dict/2607/';
+const BASE = './dict/2611/';
 const NSH = 512;
 const isOpen = () => !!app.settings.thOpen;
 // 유의어(AI) 창과 겹치지 않게: 유의어 창이 열려 있으면 그 반대쪽, 아니면 정한 쪽(기본 오른쪽)
@@ -18,7 +19,7 @@ function side() {
 
 // ---------- 데이터 ----------
 const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
-function crc32(s) {
+export function crc32(s) {
   let c = 0xffffffff;
   for (const b of new TextEncoder().encode(s)) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
@@ -62,6 +63,7 @@ function stemVariants(s) {
   const last = s.at(-1), pre = s.slice(0, -1), d = dec(last);
   if (!d) return out;
   const push = (x) => { if (x && !out.includes(x)) out.push(x); };
+  const bieup = (p) => { const q = p && dec(p.at(-1)); if (q && q.t === 0) push(p.slice(0, -1) + com(q.l, q.v, J.ㅂ)); };
   if (d.t === J.ㅆ) { const b = pre + com(d.l, d.v); out.push(...stemVariants(b).filter((x) => !out.includes(x))); }
   if (last === '해' || last === '했') push(pre + '하');
   if (d.t === 0) {
@@ -78,7 +80,9 @@ function stemVariants(s) {
     push(pre + com(d.l, d.v, J.ㅅ)); // 나 → 낫 (ㅅ 불규칙: 나아 → 낫다)
     push(pre + com(d.l, d.v, J.ㅎ)); // 그러 → 그렇
     if (d.v === V.ㅐ) { push(pre + com(d.l, V.ㅓ, J.ㅎ)); push(pre + com(d.l, V.ㅏ, J.ㅎ)); } // 그래 → 그렇, 파래 → 파랗
+    if (d.l === 11 && d.v === V.ㅜ) bieup(pre); // 아름다우(니) → 아름답
   } else {
+    if (d.l === 11 && d.v === V.ㅜ && [J.ㄴ, J.ㄹ, J.ㅁ].includes(d.t)) bieup(pre); // 아름다운·추울·가까움 → 아름답·춥·가깝 (ㅂ 불규칙)
     if (d.t === J.ㄹ) push(pre + com(d.l, d.v, J.ㄷ)); // 걸 → 걷 (ㄷ 불규칙)
     if ([J.ㄴ, J.ㄹ, J.ㅁ, J.ㅂ].includes(d.t)) {
       const b = pre + com(d.l, d.v);
@@ -89,7 +93,7 @@ function stemVariants(s) {
   }
   return out;
 }
-function candidates(form) {
+export function candidates(form) {
   const f = keyOf(form);
   const out = [];
   const push = (x) => { if (x && x.length >= 1 && !out.includes(x)) out.push(x); };
@@ -101,6 +105,8 @@ function candidates(form) {
     if (f.endsWith(e) && f.length > e.length) tails.push(f.slice(0, -e.length));
   }
   tails.push(f);
+  // 매개 모음 ‘으’: 들으니·걸으며 → 들·걸 (→ 듣다·걷다)
+  for (const s of [...tails]) if (s.endsWith('으') && s.length > 1) tails.push(s.slice(0, -1));
   for (const s of tails) for (const v of stemVariants(s)) push(v + '다');
   // 이름씨 + 이다(‘하늘이었다’), 여럿(‘사람들은’)
   for (const s of [...tails, ...out.filter((x) => !x.endsWith('다'))]) {
@@ -212,6 +218,8 @@ function doReplace(newWord) {
 
 // ---------- 창 ----------
 const view = { tab: 'look', res: null, back: [], fwd: [], target: null, loading: false, err: '' };
+// 용례 사전: for(찾은 낱말) · groups(사전 용례) · work(내 원고에서 찾은 것, 원고가 바뀌면 다시) · sub('dict'|'work')
+const us = { for: '', groups: null, loading: false, err: '', sub: 'dict', work: null, workKey: '' };
 const recentKey = 'nw-th-recent';
 const recent = () => { try { return JSON.parse(localStorage.getItem(recentKey) || '[]'); } catch { return []; } };
 function addRecent(w) { try { const r = [w, ...recent().filter((x) => x !== w)].slice(0, 60); localStorage.setItem(recentKey, JSON.stringify(r)); } catch { /* 무시 */ } }
@@ -225,7 +233,7 @@ function build() {
   el.innerHTML = `<div class="syn-head">
       <button type="button" class="icon-btn th-back" title="뒤로" aria-label="뒤로">‹</button>
       <button type="button" class="icon-btn th-fwd" title="앞으로" aria-label="앞으로">›</button>
-      <b>유의어 사전</b>
+      <b class="th-name">유의어 사전</b>
       <button type="button" class="icon-btn th-side" title="반대쪽으로 옮기기" aria-label="반대쪽으로 옮기기">⇄</button>
       <button type="button" class="icon-btn th-close" title="닫기" aria-label="유의어 사전 닫기">✕</button>
     </div>
@@ -235,7 +243,7 @@ function build() {
       <div class="th-sug" hidden role="listbox"></div>
     </form>
     <div class="th-tabs" role="tablist">
-      <button type="button" data-tab="look">찾기</button><button type="button" data-tab="marks">책갈피</button><button type="button" data-tab="recent">최근</button><button type="button" data-tab="quiz">낱말 맞히기</button>
+      <button type="button" data-tab="look">찾기</button><button type="button" data-tab="usage" title="낱말이 쓰인 문장: 사전 용례와 내 원고">용례</button><button type="button" data-tab="marks">책갈피</button><button type="button" data-tab="recent">최근</button><button type="button" data-tab="quiz">낱말 맞히기</button>
     </div>
     <div class="th-body" aria-live="polite"></div>
     <label class="th-follow"><input type="checkbox" class="th-follow-cb"> 커서를 옮기면 그 낱말을 바로 찾기</label>`;
@@ -286,11 +294,21 @@ function build() {
   el.addEventListener('mousedown', (e) => { if (e.target.closest('[data-rep]')) e.preventDefault(); });
   el.addEventListener('click', (e) => {
     const t = e.target.closest('[data-tab]');
-    if (t) { view.tab = t.dataset.tab; if (view.tab === 'quiz' && !quiz.cur) newQuiz(); render(); return; }
+    if (t) { view.tab = t.dataset.tab; if (view.tab === 'quiz' && !quiz.cur) newQuiz(); if (view.tab === 'usage') loadUsage(); render(); return; }
+    const sb = e.target.closest('[data-us]');
+    if (sb) { us.sub = sb.dataset.us; app.settings.usSub = us.sub; saveSettings(); render(); return; }
+    const j = e.target.closest('[data-jump]');
+    if (j) {
+      // 그 자리를 고르는 것은 커서 따라 찾기로 치지 않는다 (용례 목록이 다른 말로 바뀌지 않게)
+      const [id, para, off, len] = j.dataset.jump.split('|');
+      followHold = Date.now();
+      jumpTo(id, +para, +off, +len, j.dataset.hit).finally(() => { followHold = Date.now(); });
+      return;
+    }
     const r = e.target.closest('[data-rep]');
     if (r) { doReplace(r.dataset.rep); return; }
     const g = e.target.closest('[data-go]');
-    if (g) { e.preventDefault(); sug.hidden = true; view.tab = 'look'; go(g.dataset.go); return; }
+    if (g) { e.preventDefault(); sug.hidden = true; if (view.tab !== 'usage') view.tab = 'look'; go(g.dataset.go); return; }
     if (e.target.closest('[data-mark]')) { toggleMark(); return; }
     const um = e.target.closest('[data-unmark]');
     if (um) { app.settings.thBookmarks = marks().filter((x) => x !== um.dataset.unmark); saveSettings(); render(); return; }
@@ -320,14 +338,16 @@ export function toggleThesaurus(on) {
   if (on) { render(); if (!view.res) lookupThesaurus({ quiet: true }); $('#thPanel .th-q')?.focus(); }
 }
 
-// 원고 낱말(또는 주어진 낱말)을 찾는다. 창이 닫혀 있으면 연다.
-export function lookupThesaurus({ word, quiet = false } = {}) {
+// 원고 낱말(또는 주어진 낱말)을 찾는다. 창이 닫혀 있으면 연다. tab 'usage'면 용례 사전으로
+export function lookupThesaurus({ word, quiet = false, tab = 'look' } = {}) {
   if (!isOpen()) { app.settings.thOpen = true; saveSettings(); layout(); }
+  view.tab = tab;
   const t = word ? null : currentTarget();
-  if (!word && !t) { if (!quiet) toast('원고에서 찾을 낱말에 커서를 두거나 글자를 골라 주세요.'); render(); return; }
-  view.tab = 'look';
+  if (!word && !t) { if (!quiet) toast('원고에서 찾을 낱말에 커서를 두거나 글자를 골라 주세요.'); render(); $('#thPanel .th-q')?.focus(); return; }
   go(word || t.text, { target: t });
 }
+// 용례 사전: 낱말이 쓰인 문장 (사전 용례 + 내 원고)
+export const lookupUsage = (o = {}) => lookupThesaurus({ ...o, tab: 'usage' });
 
 let goSeq = 0;
 async function go(w, { hist = true, target } = {}) {
@@ -335,7 +355,7 @@ async function go(w, { hist = true, target } = {}) {
   if (!w) return;
   const my = ++goSeq;
   if (hist && view.res?.form && keyOf(view.res.form) !== keyOf(w)) { view.back.push(view.res.form); view.fwd = []; if (view.back.length > 50) view.back.shift(); }
-  view.loading = true; view.err = '';
+  view.loading = true; view.err = ''; view.raw = w;
   const q = $('#thPanel .th-q'); if (q) q.value = w;
   render();
   try {
@@ -351,7 +371,52 @@ async function go(w, { hist = true, target } = {}) {
     view.err = '사전 데이터를 불러오지 못했어요. 인터넷이 끊겼거나(웹 앱은 처음 찾을 때 받아 와요) 미리보기 파일이라 사전이 들어 있지 않아요.';
   }
   view.loading = false;
+  if (view.tab === 'usage') await loadUsage();
+  if (my !== goSeq) return;
   render();
+}
+
+// ---------- 용례 사전 ----------
+const usageKey = () => view.res?.key || keyOf(view.res?.form || '');
+async function loadUsage() {
+  const k = usageKey();
+  if (!k || (us.for === k && !us.err)) return;
+  us.for = k; us.groups = null; us.work = null; us.err = ''; us.loading = true;
+  render();
+  try { const g = await examplesOf(k); if (us.for === k) us.groups = g; } catch { if (us.for === k) us.err = '용례 데이터를 불러오지 못했어요. 인터넷이 끊겼거나(웹 앱은 처음 찾을 때 받아 와요) 미리보기 파일이라 사전이 들어 있지 않아요.'; }
+  if (us.for !== k) return;
+  us.loading = false;
+  if (!view.loading) render();
+}
+const PRED = new Set(['동사', '형용사', '보조 동사', '보조 형용사']);
+// 원고는 고칠 때마다 바뀌므로, 보여 줄 때 바뀌었으면 다시 찾는다
+function workResult() {
+  const r = view.res, k = usageKey();
+  const raw = view.raw || r?.form || k;
+  const stamp = `${k}|${raw}|${app.cur}|${app.editor?.state.doc.content.size}|${[...app.chapters.values()].map((c) => (c.html || '').length).join(',')}`;
+  if (us.work && us.workKey === stamp && us.workDoc === app.editor?.state.doc) return us.work;
+  const ps = r?.data?.e?.flatMap((e) => e.sn.map((x) => x.p)).filter(Boolean) || (us.groups || []).map((g) => g.p).filter(Boolean);
+  const verb = ps.length ? ps.filter((p) => PRED.has(p)).length * 2 >= ps.length : undefined;
+  us.work = findInWork(k, raw, { verb });
+  us.workKey = stamp; us.workDoc = app.editor?.state.doc;
+  return us.work;
+}
+function renderUsage() {
+  if (view.loading || us.loading) return '<p class="hint th-pad">찾는 중…</p>';
+  if (view.err) return `<p class="hint th-pad">${h(view.err)}</p>`;
+  const r = view.res;
+  if (!r || !usageKey()) return `<div class="th-pad"><p class="hint">낱말이 실제로 쓰인 문장을 보여 줘요. 원고에서 낱말에 커서를 두고 <b>원고 낱말</b>(또는 ${h(kbdU())})을 누르거나, 위 칸에 낱말을 쳐 보세요.</p>
+    <p class="hint"><b>사전 용례</b>: 국립국어원 사전 3종의 뜻별 예문, 어울리는 표현, 대화<br><b>내 원고</b>: 이 작품에서 그 낱말(활용형·조사 붙은 꼴까지)이 쓰인 문장. 누르면 그 자리로 가요.</p>${recentList(8)}</div>`;
+  const head = r.data?.e?.[0]?.w || r.key || r.form;
+  const work = workResult();
+  const nd = (us.groups || []).reduce((a, g) => a + (g.g?.length || 0) + (g.e?.length || 0) + (g.t?.length || 0), 0);
+  const formNote = r.form !== r.key && r.key ? `<small class="hint">‘${h(r.form)}’의 기본형${r.alt?.length ? ` · 다른 후보: ${r.alt.map((a) => `<a href="#" data-go="${h(a)}">${h(a)}</a>`).join(', ')}` : ''}</small>` : '';
+  const sub = us.sub === 'work' ? 'work' : 'dict';
+  let html = `<div class="th-word"><div class="th-title"><b>${h(head)}</b></div>${formNote}</div>
+    <div class="us-sub" role="tablist"><button type="button" data-us="dict" aria-pressed="${sub === 'dict'}">사전 용례 <small>${nd}</small></button><button type="button" data-us="work" aria-pressed="${sub === 'work'}">내 원고 <small>${work.total}</small></button></div>`;
+  html += sub === 'work' ? renderWorkExamples(work, head) : (us.err ? `<p class="hint th-pad">${h(us.err)}</p>` : renderDictExamples(us.groups || [], r.key || usageKey(), head, (p) => POSS[p] || p));
+  html += moreLinks(head);
+  return html;
 }
 
 function toggleMark() {
@@ -391,7 +456,7 @@ function renderLook() {
     ? `<p class="th-tgt">원고의 <b>‘${h(t.text)}’</b> ${replacement(t, head) ? '— 말 옆의 <span class="th-rep-i">↵</span>를 누르면 그 말로 바꿔요' : '— 활용형이라 바꿀 말은 직접 고쳐 주세요'}</p>` : '';
   const formNote = r.form !== r.key ? `<small class="hint">‘${h(r.form)}’의 기본형${r.alt?.length ? ` · 다른 후보: ${r.alt.map((a) => `<a href="#" data-go="${h(a)}">${h(a)}</a>`).join(', ')}` : ''}</small>` : '';
   let html = `<div class="th-word"><div class="th-title"><b>${h(head)}</b>${es.some((e) => e.hj) ? `<span class="th-hj">${h(uniq(es.map((e) => e.hj)).join(' · '))}</span>` : ''}
-    <button type="button" class="icon-btn th-star ${marked ? 'on' : ''}" data-mark title="${marked ? '책갈피 빼기' : '책갈피에 넣기'}" aria-pressed="${marked}">${marked ? '★' : '☆'}</button></div>${formNote}</div>${tgt}`;
+    <button type="button" class="icon-btn th-star ${marked ? 'on' : ''}" data-mark title="${marked ? '책갈피 빼기' : '책갈피에 넣기'}" aria-pressed="${marked}">${marked ? '★' : '☆'}</button></div>${formNote}<button type="button" class="th-to-us" data-tab="usage">이 낱말이 쓰인 문장 보기 (용례 사전 ${h(kbdU())}) ›</button></div>${tgt}`;
   const sec = (title, body, sub = '') => body ? `<section class="th-sec"><h4>${title}${sub ? ` <small>${sub}</small>` : ''}</h4>${body}</section>` : '';
   html += sec('유의어', S.length ? `<div class="th-chips">${chips(S)}</div>` : '', '사전에 오른 비슷한말');
   const D2 = (x.d2 || []).filter((w) => !D.includes(w) && !S.includes(w));
@@ -495,16 +560,20 @@ function renderQuiz() {
 }
 
 const kbd = () => { try { return document.querySelector('[data-kbd="thesaurus"]')?.textContent || 'Ctrl+Shift+U'; } catch { return 'Ctrl+Shift+U'; } };
+const kbdU = () => { try { return document.querySelector('[data-kbd="usage"]')?.textContent || 'Ctrl+Shift+K'; } catch { return 'Ctrl+Shift+K'; } };
 function render() {
   const el = $('#thPanel');
   if (!el || el.hidden) return;
   el.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tab === view.tab)));
+  el.querySelector('.th-name').textContent = view.tab === 'usage' ? '용례 사전' : '유의어 사전';
+  el.setAttribute('aria-label', view.tab === 'usage' ? '용례 사전' : '유의어 사전');
   el.querySelector('.th-back').disabled = !view.back.length;
   el.querySelector('.th-fwd').disabled = !view.fwd.length;
   const body = el.querySelector('.th-body');
-  const keepScroll = view.tab === 'look' && body.dataset.for === view.res?.form ? body.scrollTop : 0;
-  body.innerHTML = view.tab === 'marks' ? renderMarks() : view.tab === 'recent' ? renderRecent() : view.tab === 'quiz' ? renderQuiz() : renderLook();
-  body.dataset.for = view.res?.form || '';
+  const forKey = `${view.tab}|${view.res?.form || ''}|${view.tab === 'usage' ? us.sub : ''}`;
+  const keepScroll = (view.tab === 'look' || view.tab === 'usage') && body.dataset.for === forKey ? body.scrollTop : 0;
+  body.innerHTML = view.tab === 'marks' ? renderMarks() : view.tab === 'recent' ? renderRecent() : view.tab === 'quiz' ? renderQuiz() : view.tab === 'usage' ? renderUsage() : renderLook();
+  body.dataset.for = forKey;
   body.scrollTop = keepScroll;
   // 같은 갈래 말은 펼칠 때 불러온다
   body.querySelector('.th-cats')?.addEventListener('toggle', async (e) => {
@@ -520,16 +589,18 @@ function render() {
   });
 }
 
-let followTimer = 0;
+let followTimer = 0, followHold = 0;
 export function bindThesaurus() {
+  us.sub = app.settings.usSub === 'work' ? 'work' : 'dict';
   app.hooks.afterOpen.push(() => { view.target = null; layout(); render(); });
   document.addEventListener('nw-syn-changed', () => layout());
   app.editor.on('selectionUpdate', () => {
     if (!isOpen() || !app.settings.thFollow) return;
     clearTimeout(followTimer);
+    if (Date.now() - followHold < 1000) return;
     followTimer = setTimeout(() => {
       const t = currentTarget();
-      if (t && keyOf(t.text) !== keyOf(view.res?.form || '') && /[가-힣]/.test(t.text)) { view.tab = 'look'; go(t.text, { target: t, hist: false }); }
+      if (t && keyOf(t.text) !== keyOf(view.res?.form || '') && /[가-힣]/.test(t.text)) { if (view.tab !== 'usage') view.tab = 'look'; go(t.text, { target: t, hist: false }); }
     }, 500);
   });
   layout();

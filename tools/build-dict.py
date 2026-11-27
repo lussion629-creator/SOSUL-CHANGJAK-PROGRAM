@@ -78,9 +78,12 @@ for f in sorted(glob.glob(OD + '/*.xml')):
                 if c.text: conj.setdefault(c.text.replace(' ', ''), k)
         p = s.findtext('pos')
         if p and p != '품사 없음': sense['p'] = p
-        ex = [clean(x.findtext('example')) for x in s.findall('example_info')]
+        # 출판물·신문에서 인용한 예문(출처가 붙은 것)은 자유 이용 허락이 아니므로 넣지 않는다
+        ex = [clean(x.findtext('example')) for x in s.findall('example_info') if not (x.findtext('source') or '').strip()]
         ex = [x for x in ex if x and len(x) < 120][:1]
         if ex: sense['e'] = ex
+        # 용례가 있는 뜻인지(출처 있는 용례 포함)는 흔히 쓰는 말을 앞세우는 데만 쓰고 내보내지 않는다
+        if any((lambda t: t and len(t) < 120)(clean(x.findtext('example'))) for x in s.findall('example_info')): sense['h'] = 1
         try: sense['n'] = int(s.findtext('sense_no') or 0)
         except ValueError: sense['n'] = 0
         e['sn'].append(sense)
@@ -95,7 +98,7 @@ for e in entries.values():
     bykey[e['k']].append(e)
 # 동형어 순서: 용례가 있는 것 → 전문 분야가 아닌 뜻이 있는 것 → 사전 순서 (‘사과(沙果)’가 ‘사과(참외)’보다 먼저)
 def rank(e):
-    return (0 if any(x.get('e') for x in e['sn']) else 1, 0 if any('c' not in x for x in e['sn']) else 1, e['o'])
+    return (0 if any(x.get('h') for x in e['sn']) else 1, 0 if any('c' not in x for x in e['sn']) else 1, e['o'])
 for k in bykey: bykey[k].sort(key=rank)
 # 낱말 단위 모음: 우리말샘 뜻별 관계 + 기초사전 + 거꾸로 이은 것
 word = {}
@@ -157,7 +160,7 @@ def toks(d):
     return [re.sub(r'[^가-힣]', '', t) for t in re.split(r'[\s,.·…]+', d) if re.sub(r'[^가-힣]', '', t)]
 def common(c):
     if c in kd: return 0
-    return 1 if any(x.get('e') for e in bykey[c] for x in e['sn']) else 2
+    return 1 if any(x.get('h') for e in bykey[c] for x in e['sn']) else 2
 GENERIC = set('있다 없다 하다 되다 가다 오다 나다 들다 가지다 생기다 나서다 이르다 따르다 말다 같다 듯하다 보다 지다 받다 주다 대하다 위하다 어떻다 그렇다 이렇다 저렇다 많다 적다 않다 못하다 싶다 쓰다 두다 놓다 내다 대다 삼다 여기다 이루다 일다 아니다 갖다'.split())
 def cands(k, d):
     p = POS[k]; out = []
@@ -212,7 +215,9 @@ os.makedirs(OUT + '/s', exist_ok=True)
 def shard(k): return zlib.crc32(k.encode()) % NSH
 sh = defaultdict(lambda: {'w': {}, 'c': {}})
 for k, es in bykey.items():
-    for e in es: e.pop('k'); e.pop('o')
+    for e in es:
+        e.pop('k'); e.pop('o')
+        for x in e['sn']: x.pop('h', None)
     sh[shard(k)]['w'][k] = {'e': es, **({'x': word[k]} if word[k] else {})}
 conj = {c: k for c, k in conj.items() if c != k and k in bykey and c not in bykey}
 for c, k in conj.items(): sh[shard(c)]['c'][c] = k

@@ -151,6 +151,12 @@ app.on('will-quit', stopHost);
 ipcMain.handle('check-update', (e) => (isApp(e.senderFrame?.url) ? updater.check(true) : null));
 ipcMain.handle('app-version', (e) => (isApp(e.senderFrame?.url) ? app.getVersion() : null));
 
+// PDF로 내보내기: 앱 화면을 인쇄용 모양(쪽 설정의 @page)으로 PDF 파일 내용을 만들어 돌려준다 (저장은 앱 화면이 내려받기로)
+ipcMain.handle('print-pdf', async (e) => {
+  if (!isApp(e.senderFrame?.url) || e.sender !== win?.webContents) return null;
+  return e.sender.printToPDF({ preferCSSPageSize: true, printBackground: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } });
+});
+
 // 저장에 실패한 뒤 사용자가 앱 화면에서 '저장하지 않고 진행'을 고름
 ipcMain.on('force-close', (e, what) => {
   const w = BrowserWindow.fromWebContents(e.sender);

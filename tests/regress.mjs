@@ -499,6 +499,35 @@ await test('찾기 화면: 치면 바로 첫 결과로 가서 선택하고, Ente
   await ctx.close();
 });
 
+await test('찾기: 찾을 말을 고치면 지금 자리에서 다시 찾고(지난 번호를 쓰지 않음), 한글 조합 중 Enter는 한 번만 옮기며, 원고를 눌러 옮기면 그 자리부터 찾는다', async () => {
+  const { ctx, page } = await boot();
+  const paras = Array.from({ length: 20 }, (_, i) => `<p>${i + 1}번 가나다 가라마</p>`).join('');
+  await mkProject(page, [{ title: 'A', html: paras }]);
+  await run(page, 'A.app.editor.commands.setTextSelection(1);');
+  await findUI(page, '가', false); await page.waitForTimeout(200);
+  const cnt = () => page.textContent('#findCount');
+  assert(await cnt() === '1/40', '가: ' + await cnt());
+  for (let i = 0; i < 10; i++) await page.keyboard.press('Enter');
+  assert(await cnt() === '11/40', '열 번: ' + await cnt());
+  // ‘가’의 11째(6번 문단)에서 ‘가나’로 고치면 6번 문단의 ‘가나’ (전에는 ‘가나’의 11째로 건너뛰었다)
+  await page.fill('#findInput', '가나'); await page.waitForTimeout(150);
+  assert(await cnt() === '6/20', '가나: ' + await cnt());
+  // 한글 조합을 맺는 Enter와 곧바로 오는 Enter는 한 번으로
+  const enter = (composing) => page.evaluate((c) => document.querySelector('#findInput').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: c, bubbles: true, cancelable: true })), composing);
+  await enter(true); await enter(false); await page.waitForTimeout(300);
+  assert(await cnt() === '7/20', '두 번 온 Enter는 한 칸: ' + await cnt());
+  // 조합을 맺는 Enter만 오는 경우도 한 칸
+  await enter(true); await page.waitForTimeout(300);
+  assert(await cnt() === '8/20', '조합 Enter만: ' + await cnt());
+  // 원고를 눌러 18번 문단으로 옮긴 뒤 Enter → 그 자리 뒤 첫 결과
+  await run(page, `let p = 0; A.app.editor.state.doc.forEach((n, off, i) => { if (i === 17) p = off + 1; }); A.app.editor.commands.setTextSelection(p);`);
+  await page.focus('#findInput'); await page.keyboard.press('Enter');
+  assert(await cnt() === '18/20', '누른 자리부터: ' + await cnt());
+  const sel = await run(page, 'const { from, to } = A.app.editor.state.selection; return A.app.editor.state.doc.textBetween(from - 4, to);');
+  assert(/18번 가나/.test(sel), '18번 문단: ' + sel);
+  await ctx.close();
+});
+
 await test('유의어 사전: 커서 낱말의 기본형을 찾아 뜻풀이·유의어·반의어·예문을 보여 주고, 누르면 원고 낱말을 조사까지 맞춰 바꾼다', async () => {
   const { ctx, page } = await boot();
   await mkProject(page, [{ title: 'A', html: '<p>그는 너무 기뻤다. 거짓말을 했다. 마음이 흐뭇한 날.</p>' }]);
@@ -556,6 +585,75 @@ await test('유의어 사전: 활용형·조사 붙은 말에서 기본형을 �
   const out = await run(page, `const T = await import('/src/thesaurus.js'); const r = {}; for (const f of arg) { const x = await T.find(f); r[f] = x ? [x.key, ...(x.alt || [])] : []; } return r;`, Object.keys(cases));
   const bad = Object.entries(cases).filter(([f, e]) => !out[f].includes(e)).map(([f, e]) => `${f}→${out[f].join('/')}(기대 ${e})`);
   assert(!bad.length, bad.join(', '));
+  await ctx.close();
+});
+
+await test('용례 사전: 커서 낱말의 사전 용례(뜻별 구·문장·대화)와 내 원고에서 쓰인 문장(활용형까지, 장마다)을 보여 주고, 누르면 다른 장이어도 그 자리로 간다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [
+    { title: '첫째 장', html: '<p>그는 천천히 걸었다. 구름이 걷고 해가 났다.</p><p>우리는 강가를 걸어서 집에 갔다. 그런 걸 알았다.</p>' },
+    { title: '둘째 장', html: '<p>아이가 처음 걷던 날.</p><p>그녀는 하염없이 걷고 또 걸었다. 눈시울을 붉혔다.</p>' },
+  ]);
+  const body = () => page.textContent('#thPanel .th-body');
+  // 오른쪽 클릭 메뉴 없이 단축키로: ‘걷고’(장 1)에 커서
+  await run(page, 'const d = A.app.editor.state.doc.textContent; A.app.editor.commands.setTextSelection(d.indexOf("걷고") + 2);');
+  await page.keyboard.press('Control+Shift+K');
+  await page.waitForFunction(() => /사전 용례/.test(document.querySelector('#thPanel .th-body')?.textContent || '') && document.querySelector('#thPanel .us-grp'));
+  assert((await page.textContent('#thPanel .th-name')) === '용례 사전', '창 이름');
+  let t = await body();
+  assert(/^\s*걷다/.test(t) && /어울리는 표현/.test(t) && /가: /.test(t) && /나: /.test(t) && /표준/.test(t), '사전 용례: ' + t.slice(0, 300));
+  assert(await page.$('#thPanel .us-grp mark'), '찾은 말 표시');
+  assert(/표준국어대사전/.test(t) && await page.$('#thPanel .th-src a[href^="https://opendict.korean.go.kr/"]'), '사전 누리집 링크');
+  // 내 원고: 걸었다·걸어서·걷고·걷던 (‘그런 걸’의 ‘걸’은 아니다), 장마다
+  await page.click('#thPanel [data-us="work"]');
+  await page.waitForSelector('#thPanel .us-hit');
+  t = await body();
+  const forms = await page.$$eval('#thPanel .us-form', (x) => x.map((e) => e.firstChild.textContent.trim()).sort());
+  assert(JSON.stringify(forms) === JSON.stringify(['걷고', '걷던', '걸어서', '걸었다']), '꼴: ' + forms.join(','));
+  assert(/이 작품에서\s*6번/.test(t) && /첫째 장/.test(t) && /둘째 장/.test(t), '내 원고: ' + t.slice(0, 300));
+  assert(!/그런 걸 알았다/.test(t), '‘걸’(것을)은 걷다가 아니다');
+  // 둘째 장의 ‘걸었다’를 누르면 그 장을 열고 그 자리를 고른다
+  await page.locator('#thPanel .us-ch:has-text("둘째 장") .us-hit:has-text("하염없이")').last().click();
+  await page.waitForFunction(() => document.querySelector('#chapterTitle').value === '둘째 장');
+  await page.waitForTimeout(200);
+  const sel = await run(page, 'const { from, to } = A.app.editor.state.selection; return A.app.editor.state.doc.textBetween(from, to);');
+  assert(sel === '걷고' || sel === '걸었다', '고른 자리: ' + sel);
+  // 원고를 고치면 다시 센다
+  await run(page, 'A.app.editor.commands.insertContentAt(A.app.editor.state.doc.content.size - 1, " 다시 걸었다.");');
+  await page.click('#thPanel [data-us="dict"]'); await page.click('#thPanel [data-us="work"]');
+  assert(/이 작품에서\s*7번/.test(await body()), '고친 뒤: ' + (await body()).slice(0, 200));
+  // 띄어 쓴 구절은 글자 그대로 · 사전에 없는 말(이름)도 원고에서 찾는다
+  await page.fill('#thPanel .th-q', '눈시울을 붉혔'); await page.press('#thPanel .th-q', 'Enter');
+  await page.waitForFunction(() => /이 작품에서\s*1번/.test(document.querySelector('#thPanel .th-body')?.textContent || ''));
+  // 유의어 사전 ‘찾기’ 탭에서 용례로 넘어가기
+  await page.click('#thPanel [data-tab="look"]');
+  await page.fill('#thPanel .th-q', '설레다'); await page.press('#thPanel .th-q', 'Enter');
+  await page.waitForSelector('#thPanel .th-to-us');
+  await page.click('#thPanel .th-to-us');
+  await page.waitForSelector('#thPanel .us-sub');
+  assert((await page.textContent('#thPanel .th-name')) === '용례 사전', '찾기 → 용례');
+  assert(/이 작품에는 ‘설레다’이\(가\) 쓰인 문장이 없어요/.test(await body()), '원고에 없는 말: ' + (await body()).slice(0, 200));
+  await page.click('#thPanel [data-us="dict"]');
+  await page.waitForSelector('#thPanel .us-grp');
+  assert(/설레는|설레어|설렌/.test(await body()), '설레다 용례');
+  await ctx.close();
+});
+
+await test('용례 사전: 원고의 어절이 그 낱말의 꼴인지 가린다 (활용형·조사·불규칙, 비슷하게 생긴 다른 말은 빼고)', async () => {
+  const { ctx, page } = await boot();
+  const cases = {
+    '걷다|v': [['걸었다', '걸어서', '걷고', '걸으며', '걸음', '걷던'], ['걸', '걸고', '걸까', '거두다', '걷어차다']],
+    '듣다|v': [['들었다', '듣고', '들으니'], ['들', '들고', '들판']],
+    '쓰다|v': [['써서', '썼다', '쓰고', '쓴'], ['쓰레기', '쏘다']],
+    '아름답다|v': [['아름다운', '아름다워서', '아름다웠다'], ['아름']],
+    '하다|v': [['했다', '하고', '해서', '한다'], ['하늘']],
+    '사람|n': [['사람', '사람이', '사람들은', '사람에게서', '사람이었다'], ['사랑', '사람답다']],
+    '눈|n': [['눈', '눈을', '눈에는', '눈이었다'], ['눈물', '누나']],
+    '바다|n': [['바다', '바다를', '바다에서', '바다였다'], ['받아', '바닥']],
+  };
+  const out = await run(page, `const U = await import('/src/usage.js'); const r = {}; for (const [k, [yes, no]] of Object.entries(arg)) { const [w, t] = k.split('|'); const m = U.matcher(w, { verb: t === 'v' }); r[k] = [yes.filter((x) => !m(x)), no.filter((x) => m(x))]; } return r;`, cases);
+  const bad = Object.entries(out).filter(([, [a, b]]) => a.length || b.length).map(([k, [a, b]]) => `${k}: 놓침 ${a.join('/')} 잘못 ${b.join('/')}`);
+  assert(!bad.length, bad.join(' · '));
   await ctx.close();
 });
 
@@ -647,6 +745,49 @@ await test('쪽 설정: 다른 기기에서 받은 예전 쪽 설정이 방금 �
     return { size: now.layout.size, mt: now.layout.mt };
   `);
   assert(r.size === 12.5 && r.mt === 33, '방금 바꾼 쪽 설정 유지: ' + JSON.stringify(r));
+  await ctx.close();
+});
+
+await test('PDF: 흰 종이에 쪽 보기와 같은 줄 수(A5 예시 템플릿은 쪽마다 24줄)로 찍고, 문단 앞 띄어쓰기를 지키며, 쪽 번호는 시작 번호부터', async () => {
+  const { ctx, page } = await boot();
+  const lines = (n) => Array.from({ length: n }, (_, i) => `<p>  ${i + 1}줄</p>`).join('');
+  await mkProject(page, [{ title: 'A', html: lines(48) }]);
+  await page.evaluate(() => { window.__printed = 0; window.print = () => { window.__printed++; }; });
+  const pdfPages = async (html, lay) => {
+    await run(page, `A.app.editor.commands.setContent(arg.html); await A.saveNow(); if (arg.lay) { const L = await import('/src/layout.js'); await L.setProjectLayout({ ...L.layoutOf(), ...arg.lay }); }
+      const F = await import('/src/features.js'); await F.printBook();`, { html, lay });
+    await page.waitForFunction(() => window.__printed > 0); await page.evaluate(() => { window.__printed = 0; });
+    await page.emulateMedia({ media: 'print' });
+    const bg = await page.evaluate(() => [getComputedStyle(document.documentElement).backgroundColor, getComputedStyle(document.querySelector('#printArea .prose')).whiteSpace]);
+    const buf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+    await page.emulateMedia({ media: 'screen' });
+    return { n: (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length, bg, buf };
+  };
+  let r = await pdfPages(lines(48));
+  assert(r.bg[0] === 'rgb(255, 255, 255)', '흰 종이: ' + r.bg[0]);
+  assert(/pre-wrap|break-spaces/.test(r.bg[1]), '문단 앞 띄어쓰기를 지킴: ' + r.bg[1]);
+  assert(r.n === 2, '48줄은 2쪽: ' + r.n);
+  r = await pdfPages(lines(49));
+  assert(r.n === 3, '49줄은 3쪽: ' + r.n);
+  // 시작 번호: 첫 쪽에 그 번호 (크롬은 쪽 번호 counter-reset을 받지 않아 counter-increment로 맞춘다). 짝수로 시작하면 첫 쪽이 왼쪽 쪽
+  const css = await run(page, `const L = await import('/src/layout.js'); await L.setProjectLayout({ ...L.layoutOf(), numStart: 4 }); const F = await import('/src/features.js'); await F.printBook(); return document.querySelector('#printArea style').textContent;`);
+  assert(/@page :first \{ counter-increment: page 4; \}/.test(css) && /@page :left \{ @bottom-right/.test(css), '시작 번호·홀짝 바꿈: ' + css.replace(/\s+/g, ' ').slice(0, 600));
+  await ctx.close();
+});
+
+await test('PDF: 데스크톱 앱에서는 인쇄 창 없이 PDF 파일로 바로 저장한다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: 'A', html: '<p>본문</p>' }], 'Thorn');
+  await page.evaluate(() => { window.__printed = 0; window.print = () => { window.__printed++; }; window.desktop = { printPdf: async () => { window.__pdfCss = document.querySelector('#printArea style')?.textContent || ''; return new TextEncoder().encode('%PDF-1.4 fake'); } }; });
+  const exp = run(page, `const F = await import('/src/features.js'); return F.showExport();`);
+  await page.waitForSelector('#dlg[open] [name=fmt]');
+  assert(await page.$eval('#dlg [name=fmt] option[value=pdf]', (o) => o.textContent) === 'PDF (.pdf)', 'PDF 파일 형식');
+  await page.selectOption('#dlg [name=fmt]', 'pdf');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#dlg .dlg-foot button[value=ok]')]);
+  await exp;
+  assert(/^Thorn.*\.pdf$/.test(dl.suggestedFilename()), '파일 이름: ' + dl.suggestedFilename());
+  assert(await page.evaluate(() => window.__printed) === 0, '인쇄 창은 열지 않음');
+  assert(/@page \{ size: 148mm 210mm/.test(await page.evaluate(() => window.__pdfCss)), '쪽 설정대로');
   await ctx.close();
 });
 

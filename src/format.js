@@ -464,7 +464,7 @@ export function bindContextMenu() {
       <button data-c="clear"><span>서식 지우기</span></button>
       <hr>
       ${word ? `<button data-c="dict"><span>‘${h(word.slice(0, 12))}${word.length > 12 ? '…' : ''}’ 사전에서 찾기</span><small>표준국어대사전</small></button>` : ''}
-      ${word ? `<button data-c="th"><span>‘${h(word.slice(0, 12))}${word.length > 12 ? '…' : ''}’ 유의어 사전</span><small>${kb('thesaurus')}</small></button>` : ''}
+      ${word ? `<button data-c="th"><span>‘${h(word.slice(0, 12))}${word.length > 12 ? '…' : ''}’ 유의어 사전</span><small>${kb('thesaurus')}</small></button><button data-c="us"><span>‘${h(word.slice(0, 12))}${word.length > 12 ? '…' : ''}’ 용례 (쓰인 문장)</span><small>${kb('usage')}</small></button>` : ''}
       ${sel ? `<button data-c="find"><span>원고 전체에서 찾기</span></button>` : ''}
       <button data-c="readHere"><span>${sel ? '고른 부분' : '여기부터'} AI로 읽어 주기</span><small>${kb('readAloud')}</small></button>
       <button data-c="speak"><span>${sel ? '고른 부분' : '이 문단'} 기기 목소리로 읽기</span></button>
@@ -501,6 +501,7 @@ export function bindContextMenu() {
     else if (c === 'lsNarrow' || c === 'lsWide') stepSpacing(c === 'lsWide' ? 1 : -1);
     else if (c === 'scene') runCommand(ed(), 'scene');
     else if (c === 'th') import('./thesaurus.js').then((m) => m.lookupThesaurus());
+    else if (c === 'us') import('./thesaurus.js').then((m) => m.lookupUsage());
     else if (c === 'dict') window.open(`https://stdict.korean.go.kr/search/searchResult.do?searchKeyword=${encodeURIComponent(menu.dataset.word)}`, '_blank', 'noopener');
     else if (c === 'find') { const { openFind } = await import('./features.js'); $('#findInput').value = sel.trim(); openFind(); }
     else if (c === 'speak') speak(sel || paragraphText());

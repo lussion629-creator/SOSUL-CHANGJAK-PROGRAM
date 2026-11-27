@@ -1,5 +1,5 @@
 // 오프라인에서도 열리도록 앱 파일을 저장해 둔다 (원고는 IndexedDB에 따로 저장됨)
-const CACHE = 'novel-writer-v1';
+const CACHE = 'novel-writer-v2'; // 바꾸면 예전에 받아 둔 파일(옛 사전 조각 등)을 지운다
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html', './manifest.webmanifest', './icons/icon.svg'])).then(() => self.skipWaiting()));
 });

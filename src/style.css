@@ -1063,6 +1063,34 @@ body.th-open.th-left .paper-scroll { margin-left: min(360px, 60vw); }
 .th-quiz-ans b { font-size: 18px; margin-right: 6px; }
 .th-quiz-msg { font-weight: 600; }
 .th-quiz-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+/* 용례 사전 */
+.us-sub { display: flex; gap: 4px; margin: 6px 0 4px; }
+.us-sub button { flex: 1; padding: 5px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink2); font-size: 12px; cursor: pointer; }
+.us-sub button small { color: var(--ink2); font-variant-numeric: tabular-nums; }
+.us-sub button[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); background: var(--accent-bg, rgba(0,0,0,.06)); font-weight: 600; }
+.us-sum { margin: 8px 0 4px; font-size: 12px; color: var(--ink2); }
+.us-sum b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.us-grp { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--line); }
+.us-grp:first-of-type { border-top: 0; padding-top: 0; }
+.us-no { display: inline-block; min-width: 1.4em; font-weight: 700; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.us-dict { color: var(--ink2); font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; white-space: nowrap; }
+.us-phr { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; margin: 4px 0 2px; }
+.us-phr > span:first-child { font-size: 11px; color: var(--ink2); margin-right: 2px; }
+.us-p { font-size: 12px; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); }
+.us-p mark, .us-hit mark { background: rgba(255, 213, 79, .45); color: inherit; }
+.us-ex { font-size: 12.5px; color: var(--ink); margin-top: 4px; }
+.us-dia > div + div { margin-top: 1px; }
+.us-forms { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
+.us-form { font-size: 12px; padding: 0 7px; border: 1px dashed var(--line); border-radius: 999px; }
+.us-form small { color: var(--ink2); font-variant-numeric: tabular-nums; }
+.us-ch { margin-top: 10px; }
+.us-ch h4 { margin: 0 0 4px; font-size: 13px; }
+.us-ch h4 small { font-weight: 400; color: var(--ink2); font-size: 11px; }
+.us-hit { display: block; width: 100%; text-align: left; margin: 0 0 3px; padding: 5px 8px; border: 1px solid transparent; border-left: 2px solid var(--line); border-radius: 0 6px 6px 0; background: none; color: var(--ink); font: inherit; font-size: 12.5px; line-height: 1.55; cursor: pointer; }
+.us-hit:hover, .us-hit:focus-visible { border-color: var(--line); border-left-color: var(--accent); background: var(--accent-bg, rgba(0,0,0,.05)); outline: none; }
+.th-src a { color: var(--accent); }
+.th-to-us { display: block; margin-top: 4px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 12px; cursor: pointer; }
+.th-to-us:hover { text-decoration: underline; }
 .syn-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .syn-head b { flex: 1; font-size: 14px; }
 .syn-head .icon-btn { width: 28px; height: 28px; font-size: 13px; }
