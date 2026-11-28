@@ -225,6 +225,7 @@
         <button data-tab="notes">자료</button>
         <button data-tab="history">기록</button>
         <button data-tab="stash" title="지우거나 잘라 낸 50자 이상의 문장">보관함</button>
+        <button type="button" class="sb-fold" id="sbFold" title="왼쪽 목록 접기 (Ctrl+\)" aria-label="왼쪽 목록 접기"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg></button>
       </nav>
       <section class="tab" id="tab-binder">
         <div class="tab-head">
@@ -295,6 +296,7 @@
 
     <!-- 가운데: 편집기 -->
     <main class="workspace" id="workspace">
+      <button type="button" class="sb-unfold" id="sbUnfold" title="왼쪽 목록 펴기 (Ctrl+\)" aria-label="왼쪽 목록 펴기"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg></button>
       <div class="paper-scroll" id="paperScroll">
         <div class="paper" id="paper">
           <div id="editorHost"></div>

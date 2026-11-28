@@ -791,6 +791,79 @@ await test('PDF: 데스크톱 앱에서는 인쇄 창 없이 PDF 파일로 바�
   await ctx.close();
 });
 
+await test('PDF: 어두운 화면이어도 종이와 여백이 모두 흰색이다 (여백이 화면 바탕색으로 칠해져 줄 끝 글자를 덮지 않는다)', async () => {
+  const { ctx, page } = await boot();
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await mkProject(page, [{ title: 'A', html: Array.from({ length: 30 }, (_, i) => `<p>${i + 1}째 줄은 오른쪽 끝까지 꽉 차도록 아주 길게 써서 양쪽 맞춤으로 늘어나는 문단입니다 ${i}</p>`).join('') }]);
+  await run(page, `document.documentElement.dataset.theme = 'dark'; window.print = () => {}; const F = await import('/src/features.js'); await F.printBook();`);
+  await page.waitForTimeout(300);
+  await page.emulateMedia({ media: 'print', colorScheme: 'dark' });
+  const cs = await page.evaluate(() => [getComputedStyle(document.documentElement).colorScheme, document.querySelector('#printArea style').textContent]);
+  assert(cs[0] === 'light', '인쇄할 때 color-scheme: ' + cs[0]);
+  assert(/@page \{ size: [^}]*background: #fff/.test(cs[1]), '쪽 여백도 흰색: ' + cs[1].replace(/\s+/g, ' ').slice(0, 300));
+  const buf = await page.pdf({ preferCSSPageSize: true, printBackground: true, pageRanges: '1' });
+  // 그림으로 바꿔 네 귀퉁이(여백)가 흰색인지 본다 (pdftoppm이 없으면 이 부분은 건너뛴다)
+  const { execFileSync } = await import('node:child_process');
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nwpdf-'));
+  fs.writeFileSync(path.join(dir, 'a.pdf'), buf);
+  let ppm = null;
+  try { execFileSync('pdftoppm', ['-r', '20', '-f', '1', '-l', '1', path.join(dir, 'a.pdf'), path.join(dir, 'p')]); ppm = fs.readdirSync(dir).find((f) => f.endsWith('.ppm')); } catch { /* 없으면 건너뜀 */ }
+  if (ppm) {
+    const b = fs.readFileSync(path.join(dir, ppm));
+    const head = b.toString('latin1', 0, 40).split(/\s+/); const w = +head[1], hh = +head[2];
+    const off = b.length - w * hh * 3;
+    const at = (x, y) => [...b.subarray(off + (y * w + x) * 3, off + (y * w + x) * 3 + 3)];
+    for (const [x, y] of [[1, 1], [w - 2, 1], [1, hh - 2], [w - 2, hh - 2], [w - 2, hh >> 1]]) assert(at(x, y).every((v) => v > 245), `여백 (${x},${y}) 색: ${at(x, y)}`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  await page.emulateMedia({ media: 'screen' });
+  await ctx.close();
+});
+
+await test('인쇄 / PDF로 저장: 데스크톱 앱은 ‘PDF 파일로 저장’(바로 파일)과 ‘프린터로 인쇄’를 고르게 하고, 웹은 인쇄 창을 연다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: 'A', html: '<p>본문</p>' }], 'Thorn');
+  await page.evaluate(() => { window.__printed = 0; window.print = () => { window.__printed++; }; });
+  // 웹: 바로 인쇄 창
+  await page.evaluate(() => document.querySelector('[data-act="print"]').click());
+  await page.waitForFunction(() => window.__printed === 1);
+  // 데스크톱
+  await page.evaluate(() => { window.desktop = { printPdf: async () => new TextEncoder().encode('%PDF-1.4 fake') }; });
+  await page.evaluate(() => document.querySelector('[data-act="print"]').click());
+  await page.waitForSelector('#dlg[open] button[value=pdf]');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#dlg button[value=pdf]')]);
+  assert(/^Thorn.*\.pdf$/.test(dl.suggestedFilename()), '파일 이름: ' + dl.suggestedFilename());
+  assert(await page.evaluate(() => window.__printed) === 1, 'PDF 저장은 인쇄 창을 열지 않음');
+  await page.evaluate(() => document.querySelector('[data-act="print"]').click());
+  await page.waitForSelector('#dlg[open] button[value=print]');
+  await page.click('#dlg button[value=print]');
+  await page.waitForFunction(() => window.__printed === 2);
+  await ctx.close();
+});
+
+await test('왼쪽 목록: 원고·자료·기록·보관함 옆 « 단추로 접고, 원고 왼쪽 끝 » 단추로 펴며, 다음에 열어도 그대로다', async () => {
+  const { ctx, page } = await boot();
+  await mkProject(page, [{ title: 'A', html: '<p>본문</p>' }]);
+  const st = () => page.evaluate(() => ({ hidden: document.body.classList.contains('sb-hidden'), sbW: Math.round(document.querySelector('#sidebar').getBoundingClientRect().width), unfold: getComputedStyle(document.querySelector('#sbUnfold')).display, tab: document.querySelector('.tabs button.on')?.dataset.tab }));
+  let s = await st();
+  assert(!s.hidden && s.sbW > 200 && s.unfold === 'none', '처음: ' + JSON.stringify(s));
+  await page.click('#sbFold');
+  s = await st();
+  assert(s.hidden && s.sbW < 5 && s.unfold !== 'none' && s.tab === 'binder', '접음: ' + JSON.stringify(s));
+  // 다시 열어도 접힌 채
+  await page.reload(); await page.waitForSelector('.ProseMirror'); await page.waitForTimeout(400);
+  s = await st();
+  assert(s.hidden && s.unfold !== 'none', '다시 열어도: ' + JSON.stringify(s));
+  await page.click('#sbUnfold');
+  s = await st();
+  assert(!s.hidden && s.sbW > 200 && s.unfold === 'none' && s.tab === 'binder', '폄: ' + JSON.stringify(s));
+  // 접기 단추는 탭을 바꾸지 않는다
+  await page.click('.tabs [data-tab="notes"]'); await page.click('#sbFold'); await page.click('#sbUnfold');
+  assert((await st()).tab === 'notes', '탭 그대로');
+  await ctx.close();
+});
+
 await test('F07 대화상자 결과는 확인·취소·프로그램 닫기·바뀜 어느 길이든 한 번만 정해진다', async () => {
   const { ctx, page } = await boot();
   const r = await run(page, `
@@ -1461,7 +1534,8 @@ await test('맞춤법 검사: 작품 전체의 틀린 곳이 장마다 한 번�
     { title: '첫 장', html: '<p>비가 왔다.그는 “어떻해, 할께.”라고 했다.</p><p>그는 실수 없이 멀거니 서서 볼때기를 긁었다.</p>' },
     { title: '둘째 장', html: '<p>그녀는 안되요 라고 했다. 몇일 뒤였다.</p>' },
     { title: '셋째 장', html: '<p>그것은 바램이었다. 구지 그럴 필요는 없었다.</p>' }]);
-  await page.evaluate(() => { (async () => (await import('/src/proof.js')).showProof())(); });
+  // 앱이 쓰는 모듈 그대로 연다 (따로 import하면 개발 서버가 파일을 고친 뒤 다른 모듈 사본이 생길 수 있다)
+  await page.evaluate(() => document.querySelector('#stProof').click());
   await page.waitForSelector('#dlg[open] .pf-row');
   const rows = async () => page.$$eval('#pfList .pf-row', (els) => els.map((e) => e.querySelector('.pf-fix').textContent.replace(/\s+/g, ' ').trim()));
   let r = await rows();

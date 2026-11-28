@@ -265,8 +265,11 @@ function buildPrintArea(book, opt) {
   const f = (x) => Math.round(x * 100) / 100;
   area.innerHTML = `<style>
     @media print {
+      /* 어두운 화면이어도 종이는 흰색: color-scheme이 dark면 크롬이 쪽 여백을 검게 칠한다 */
+      :root, html { color-scheme: light !important; }
       html, body { background: #fff !important; height: auto !important; min-height: 0 !important; overflow: visible !important; }
-      @page { size: ${L.w}mm ${L.h}mm; margin: ${f(top)}mm ${L.mr}mm ${f(bottom)}mm ${L.ml}mm; }
+      /* 쪽 여백도 흰 종이로: 칠하지 않으면 데스크톱 앱은 창 바탕색(베이지·검정)으로 칠하고, 줄 끝에서 여백으로 조금 나간 글자를 덮는다 */
+      @page { size: ${L.w}mm ${L.h}mm; margin: ${f(top)}mm ${L.mr}mm ${f(bottom)}mm ${L.ml}mm; background: #fff; }
       ${lr} ${pageNum}
       ${first > 1 ? `@page :first { counter-increment: page ${first}; }` : ''}
       #printArea { color: #000; }
@@ -288,6 +291,29 @@ async function fontsReady(L) {
     const fam = textCss(L).fontFamily;
     await Promise.race([Promise.all([document.fonts.load(`${L.size}pt ${fam}`, '가나다'), document.fonts.load(`bold ${L.size}pt ${fam}`, '가')]).then(() => document.fonts.ready), new Promise((r) => setTimeout(r, 4000))]);
   } catch { /* 글꼴을 못 받아도 인쇄는 한다 */ }
+}
+
+// 파일 → 인쇄 / PDF로 저장. 데스크톱 앱의 인쇄 창은 운영체제 창이라 ‘PDF로 저장’이 없거나 되지 않으므로, PDF는 앱이 바로 파일로 만든다
+export async function printOrPdf() {
+  await saveNow();
+  if (!canPdfFile()) return printBook();
+  const r = await dialog({
+    title: '인쇄 / PDF로 저장',
+    body: `<p style="margin-top:0">작품 전체를 쪽 설정(<b>${h(layoutSummary())}</b>) 그대로 내보내요.</p>
+      <p class="hint" style="margin:0">범위(지금 장만)·표지·장 제목은 파일 → 내보내기에서 고를 수 있어요.</p>`,
+    buttons: [{ label: '취소', value: 'close' }, { label: '프린터로 인쇄', value: 'print' }, { label: 'PDF 파일로 저장', value: 'pdf', primary: true }],
+  });
+  if (r.value === 'print') return printBook();
+  if (r.value === 'pdf') return savePdf();
+}
+export async function savePdf(book = bookOf('all'), opt = { titlePage: false, chapterTitles: false, chapterBreak: true, ...(app.settings.exportOpts || {}) }) {
+  try {
+    toast('PDF 파일을 만드는 중…', 60000);
+    const blob = await pdfBook(book, opt);
+    const name = withDate(`${(book.title || '원고').replace(/[\\/:*?"<>|]/g, '_')}.pdf`, app.settings.nameDate);
+    download(blob, name);
+    toast(`${name} 파일을 만들었어요.`);
+  } catch (e) { console.error(e); toast('PDF를 만들지 못했습니다: ' + e.message, 6000); }
 }
 
 export async function printBook(book = bookOf('all'), opt = { titlePage: false, chapterTitles: false, chapterBreak: true, ...(app.settings.exportOpts || {}) }) {

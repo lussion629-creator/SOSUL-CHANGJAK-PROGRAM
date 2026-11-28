@@ -39,7 +39,7 @@ const ACTIONS = {
   annoSide: () => { const nx = { right: 'left', left: 'off', off: 'right' }[app.settings.annoSide || 'right']; A.setAnnoSide(nx); toast({ right: '주석을 오른쪽 여백에 보여 줘요.', left: '주석을 왼쪽 여백에 보여 줘요.', off: '여백 주석을 숨겼어요. 주석 글자를 누르면 볼 수 있어요.' }[nx]); },
   annoSticky: () => { const on = !app.settings.annoSticky; A.setAnnoSticky(on); toast(on ? '주석을 포스트잇으로 붙여 보여 줘요. 끌어서 옮기고, 두 번 누르면 고쳐요.' : '주석 포스트잇을 뗐어요.'); },
   home: F.showHome, newProject: () => F.newProject(), open: F.openFromFile, importChapter: F.importChapter,
-  export: F.showExport, print: async () => { await saveNow(); F.printBook(); }, backup: F.downloadBackup,
+  export: F.showExport, print: () => F.printOrPdf(), backup: F.downloadBackup,
   revision: () => (isRevisionOpen() ? closeRevision() : openRevision()),
   focus: () => F.toggleFocus(), cork: () => { closeRevision(); F.toggleCork(); }, theme: toggleTheme, settings: F.showSettings,
   find: F.openFind, analyze: F.showAnalyze, goals: F.showGoals, stats: showStats, today: () => showToday(), clips: () => showClips(), sprint: F.showSprint, snapshot: manualSnapshot,
@@ -214,8 +214,8 @@ function bind() {
   bindBinderDrag();
 
   // 탭
-  $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
-    $$('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
+  $$('.tabs button[data-tab]').forEach((b) => b.addEventListener('click', () => {
+    $$('.tabs button[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
     $$('.tab').forEach((t) => (t.hidden = t.id !== 'tab-' + b.dataset.tab));
     if (b.dataset.tab === 'history') renderHistory();
     if (b.dataset.tab === 'notes') F.renderNotes();
@@ -233,6 +233,9 @@ function bind() {
   $('#noteFilter').addEventListener('change', F.renderNotes);
   $('#noteSearch').addEventListener('input', F.renderNotes);
   $('#btnSidebar').addEventListener('click', () => toggleSidebar());
+  // 원고·자료·기록·보관함 옆 « 단추로 접고, 접힌 뒤에는 왼쪽 끝의 » 단추(또는 ☰, Ctrl+\)로 편다
+  $('#sbFold').addEventListener('click', () => toggleSidebar(false));
+  $('#sbUnfold').addEventListener('click', () => toggleSidebar(true));
   $('#pvZoomSel').value = app.settings.pvZoom || 'fit';
   $('#pvZoomSel').addEventListener('change', (e) => setZoom(e.target.value));
   $('#pvNumSel').value = app.settings.pvNumAll ? 'all' : 'ch';
